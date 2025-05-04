@@ -1,10 +1,12 @@
 # =====================
 # tests/test_uploader.py
 # =====================
-import pytest
-import pandas as pd
-from app import uploader
 from datetime import datetime
+
+import pandas as pd
+import pytest
+
+from app import uploader
 
 
 def test_upload_to_bigquery_mock(monkeypatch):

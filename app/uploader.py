@@ -3,9 +3,10 @@
 # Uploads option chain data to BigQuery
 # =====================
 import os
+
 import pandas as pd
-from pandas_gbq import to_gbq
 from google.oauth2 import service_account
+from pandas_gbq import to_gbq
 
 
 def upload_to_bigquery(options, timestamp, expiration, underlying_price=None):

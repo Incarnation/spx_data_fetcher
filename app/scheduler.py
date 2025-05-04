@@ -2,10 +2,13 @@
 # app/scheduler.py
 # Runs every 10 minutes during market hours, fetches and uploads data
 # =====================
-from datetime import datetime
-from apscheduler.schedulers.background import BackgroundScheduler
 import logging
-from .fetcher import fetch_option_chain, get_next_expirations, fetch_underlying_price
+from datetime import datetime
+
+from apscheduler.schedulers.background import BackgroundScheduler
+
+from .fetcher import (fetch_option_chain, fetch_underlying_price,
+                      get_next_expirations)
 from .uploader import upload_to_bigquery
 from .utils import is_market_open
 

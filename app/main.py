@@ -2,13 +2,16 @@
 # app/main.py
 # Entry point for FastAPI app and scheduler
 # =====================
-from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from datetime import datetime
+
+from fastapi import FastAPI
+
+from app.fetcher import (fetch_option_chain, fetch_underlying_price,
+                         get_next_expirations)
 from app.scheduler import start_scheduler
-from app.utils import setup_logging
-from app.fetcher import fetch_option_chain, get_next_expirations, fetch_underlying_price
 from app.uploader import upload_to_bigquery
+from app.utils import setup_logging
 
 
 @asynccontextmanager

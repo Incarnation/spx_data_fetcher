@@ -2,8 +2,8 @@
 # app/utils.py
 # Common utility functions like logging setup and market hours check
 # =====================
-import os
 import logging
+import os
 from datetime import datetime
 
 
