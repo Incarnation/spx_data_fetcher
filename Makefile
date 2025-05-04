@@ -18,7 +18,7 @@ clean:
 
 # === RUN LOCALLY ===
 run:
-	uvicorn app.main:app --reload
+	PYTHONPATH=. uvicorn app.main:app --reload
 
 logs:
 	tail -f logs/fetcher.log
@@ -27,8 +27,8 @@ test:
 	pytest tests/
 
 lint:
-	black app/ tests/
-	isort app/ tests/
+	black app/ dashboard/ tests/ analytics/ workers/
+	isort app/ dashboard/ tests/ analytics/ workers/
 
 # === DOCKER ===
 docker-build:

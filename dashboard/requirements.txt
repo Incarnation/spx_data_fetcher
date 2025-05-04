@@ -1,0 +1,10 @@
+# =====================
+# dashboard/requirements.txt
+# Dash and GCP dependencies
+# =====================
+dash
+plotly
+google-cloud-bigquery
+google-cloud-bigquery-storage
+pandas
+google-auth

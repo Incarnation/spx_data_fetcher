@@ -1,57 +1,58 @@
 # =====================
 # app/fetcher.py
-# Fetches SPX option expiration dates and chains from Tradier
+# Refactored to support multiple symbols: SPX, SPY, QQQ, NDX
 # =====================
+import logging
 import os
+from datetime import datetime
 
-import httpx
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
-API_KEY = os.getenv("TRADIER_API_KEY")
-HEADERS = {"Authorization": f"Bearer {API_KEY}", "Accept": "application/json"}
+
+TRADIER_API_KEY = os.getenv("TRADIER_API_KEY")
+HEADERS = {"Authorization": f"Bearer {TRADIER_API_KEY}", "Accept": "application/json"}
+BASE_URL = "https://api.tradier.com/v1/markets"
+CONTRACT_MULTIPLIER = 100
+SUPPORTED_SYMBOLS = ["SPX", "SPY", "QQQ"]
 
 
-def get_next_expirations(symbol="SPX", count=30):
-    url = "https://api.tradier.com/v1/markets/options/expirations"
-    params = {"symbol": symbol, "includeAllRoots": "true"}
+def fetch_underlying_quote(symbol: str) -> dict:
     try:
-        with httpx.Client() as client:
-            resp = client.get(url, headers=HEADERS, params=params)
-            data = resp.json()
-            return data.get("expirations", {}).get("date", [])[:count]
+        resp = requests.get(f"{BASE_URL}/quotes", headers=HEADERS, params={"symbols": symbol})
+        resp.raise_for_status()
+        return resp.json().get("quotes", {}).get("quote", {})
     except Exception as e:
-        import logging
+        logging.error(f"[FETCH ERROR] Unable to fetch quote for {symbol}: {e}")
+        return {}
 
-        logging.error(f"Error fetching expirations: {e}")
+
+def get_next_expirations(symbol: str, limit: int = 3):
+    try:
+        resp = requests.get(
+            f"{BASE_URL}/options/expirations",
+            headers=HEADERS,
+            params={"symbol": symbol, "includeAllRoots": "true", "strikes": "false"},
+        )
+        resp.raise_for_status()
+        return resp.json().get("expirations", {}).get("date", [])[:limit]
+    except Exception as e:
+        logging.warning(f"[FETCH WARNING] Failed to get expirations for {symbol}: {e}")
         return []
 
 
-def fetch_option_chain(symbol="SPX", expiration="2025-05-05"):
-    url = "https://api.tradier.com/v1/markets/options/chains"
-    params = {"symbol": symbol, "expiration": expiration, "greeks": "true"}
+def fetch_option_chain(symbol: str, expiration: str):
     try:
-        with httpx.Client() as client:
-            resp = client.get(url, headers=HEADERS, params=params)
-            data = resp.json()
-            return data.get("options", {}).get("option", [])
-    except Exception as e:
-        import logging
+        resp = requests.get(
+            f"{BASE_URL}/options/chains",
+            headers=HEADERS,
+            params={"symbol": symbol, "expiration": expiration, "greeks": "true"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("options", {}).get("option", [])
 
-        logging.error(f"Error fetching option chain for {expiration}: {e}")
+    except Exception as e:
+        logging.error(f"[FETCH ERROR] Unable to fetch option chain for {symbol} {expiration}: {e}")
         return []
-
-
-def fetch_underlying_price(symbol="SPX"):
-    url = "https://api.tradier.com/v1/markets/quotes"
-    params = {"symbols": symbol}
-    try:
-        with httpx.Client() as client:
-            resp = client.get(url, headers=HEADERS, params=params)
-            quote = resp.json().get("quotes", {}).get("quote", {})
-            return quote.get("last", None)
-    except Exception as e:
-        import logging
-
-        logging.error(f"Error fetching underlying price: {e}")
-        return None

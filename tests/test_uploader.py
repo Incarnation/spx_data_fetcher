@@ -46,7 +46,5 @@ def test_upload_to_bigquery_mock(monkeypatch):
     ]
 
     # Mock the upload method to just return without error
-    monkeypatch.setattr(
-        uploader, "upload_to_bigquery", lambda options, timestamp, expiration: None
-    )
+    monkeypatch.setattr(uploader, "upload_to_bigquery", lambda options, timestamp, expiration: None)
     uploader.upload_to_bigquery(mock_data, datetime.utcnow(), "2025-05-05")

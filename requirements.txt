@@ -1,11 +1,12 @@
 # =====================
 # requirements.txt
 # =====================
-fastapi
-uvicorn
-httpx
-pandas
-python-dotenv
-google-cloud-bigquery
-apscheduler
-pandas-gbq
+fastapi==0.110.0
+uvicorn[standard]==0.29.0
+httpx==0.27.0
+pandas==2.2.2
+python-dotenv==1.0.1
+google-cloud-bigquery==3.17.2
+google-auth==2.29.0
+pandas-gbq==0.19.2
+apscheduler==3.10.4
