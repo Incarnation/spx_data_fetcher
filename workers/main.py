@@ -3,12 +3,7 @@
 # Background scheduler for data fetching and analytics
 # =====================
 import logging
-import sys
 import time
-from pathlib import Path
-
-# Ensure the parent project root is on the Python path
-sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.scheduler import start_scheduler
 from app.utils import setup_logging

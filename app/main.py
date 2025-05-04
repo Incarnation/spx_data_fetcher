@@ -32,7 +32,7 @@ app = FastAPI(lifespan=lifespan)
 
 @app.get("/")
 def read_root():
-    return {"status": "running", "refresh": "every 5 minutes during trading hours"}
+    return {"status": "running", "refresh": "every 10 minutes during trading hours"}
 
 
 @app.get("/manual-fetch")

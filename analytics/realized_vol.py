@@ -13,7 +13,11 @@ from google.cloud import bigquery
 from google.oauth2 import service_account
 from pandas_gbq import to_gbq
 
-load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
+# Load .env only if running locally (optional guard)
+if os.getenv("RENDER") is None:
+    from pathlib import Path
+
+    load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
 
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
 CREDENTIALS = service_account.Credentials.from_service_account_file(

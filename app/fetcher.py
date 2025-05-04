@@ -9,7 +9,11 @@ from datetime import datetime
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env only if running locally (optional guard)
+if os.getenv("RENDER") is None:
+    from pathlib import Path
+
+    load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
 
 TRADIER_API_KEY = os.getenv("TRADIER_API_KEY")
 HEADERS = {"Authorization": f"Bearer {TRADIER_API_KEY}", "Accept": "application/json"}
