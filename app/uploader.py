@@ -6,13 +6,15 @@ import os
 import pandas as pd
 from google.cloud import bigquery
 from pandas_gbq import to_gbq
+from google.oauth2 import service_account
 
 def upload_to_bigquery(options, timestamp, expiration):
     from dotenv import load_dotenv
     load_dotenv()
     project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
-    table_id = f"{project_id}.option_chains_dataset.option_chain_snapshot"
-
+    credentials_path = "/etc/secrets/gcp-service-account.json" 
+    credentials = service_account.Credentials.from_service_account_file(credentials_path)
+    
     rows = []
     for opt in options:
         g = opt.get("greeks", {})
@@ -49,5 +51,7 @@ def upload_to_bigquery(options, timestamp, expiration):
             "underlying_price": None
         })
 
+    table_id = f"{project_id}.option_chains_dataset.option_chain_snapshot"
     df = pd.DataFrame(rows)
-    to_gbq(df, table_id, if_exists="append")
+    to_gbq(df, table_id, project_id=project_id,
+           if_exists="append", credentials=credentials)
