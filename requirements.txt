@@ -1,0 +1,10 @@
+# =====================
+# requirements.txt
+# =====================
+fastapi
+uvicorn
+httpx
+pandas
+python-dotenv
+google-cloud-bigquery
+apscheduler

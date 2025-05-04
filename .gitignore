@@ -1,0 +1,12 @@
+# =====================
+# .gitignore
+# =====================
+.env
+__pycache__/
+*.pyc
+logs/
+.DS_Store
+.vscode/
+build/
+dist/
+*.egg-info/
