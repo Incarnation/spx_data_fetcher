@@ -5,7 +5,7 @@
 from fastapi import FastAPI
 from .scheduler import start_scheduler
 from .utils import setup_logging
-from app.fetcher import fetch_option_chain, get_next_expirations
+from app.fetcher import fetch_option_chain, get_next_expirations, fetch_underlying_price
 from app.uploader import upload_to_bigquery
 from datetime import datetime
 
@@ -27,11 +27,13 @@ def manual_fetch():
     if not expirations:
         return {"status": "no expirations found"}
     
+    underlying_price = fetch_underlying_price()
+    
     logs = []
     for expiry in expirations:
         data = fetch_option_chain(expiration=expiry)
         if data:
-            upload_to_bigquery(data, now, expiry)
+            upload_to_bigquery(data, now, expiry, underlying_price)
             logs.append(f"Uploaded {len(data)} rows for {expiry}")
         else:
             logs.append(f"No data for {expiry}")

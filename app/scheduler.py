@@ -5,7 +5,7 @@
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 import logging
-from .fetcher import fetch_option_chain, get_next_expirations
+from .fetcher import fetch_option_chain, get_next_expirations, fetch_underlying_price
 from .uploader import upload_to_bigquery
 from .utils import is_market_open
 
@@ -19,8 +19,9 @@ def scheduled_job():
     for expiry in expirations:
         logging.info(f"[{now}] Fetching options for {expiry}")
         data = fetch_option_chain(expiration=expiry)
+        underlying_price = fetch_underlying_price()
         if data:
-            upload_to_bigquery(data, now, expiry)
+            upload_to_bigquery(data, now, expiry, underlying_price)
             logging.info(f"Uploaded {len(data)} rows for {expiry}")
         else:
             logging.warning(f"No data for {expiry}")

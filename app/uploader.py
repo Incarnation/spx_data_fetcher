@@ -8,7 +8,7 @@ from google.cloud import bigquery
 from pandas_gbq import to_gbq
 from google.oauth2 import service_account
 
-def upload_to_bigquery(options, timestamp, expiration):
+def upload_to_bigquery(options, timestamp, expiration, underlying_price=None):
     from dotenv import load_dotenv
     load_dotenv()
     project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
@@ -48,7 +48,7 @@ def upload_to_bigquery(options, timestamp, expiration):
             "ask_iv": g.get("ask_iv"),
             "mid_iv": g.get("mid_iv"),
             "smv_vol": g.get("smv_vol"),
-            "underlying_price": None
+            "underlying_price": underlying_price
         })
 
     table_id = f"{project_id}.option_chains_dataset.option_chain_snapshot"
