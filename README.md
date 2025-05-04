@@ -9,6 +9,8 @@ This service fetches SPX option chain data from Tradier every 15 minutes **durin
    ```
    TRADIER_API_KEY=your_tradier_api_key
    GOOGLE_CLOUD_PROJECT=your_gcp_project_id
+   GOOGLE_APPLICATION_CREDENTIALS=/etc/secrets/gcp-service-account.json
+   OPTION_CHAINS_TABLE_ID=your_full_table_id
    ```
 3. Run locally:
    ```bash
@@ -28,7 +30,7 @@ docker run -p 8080:8080 --env-file .env spx-fetcher
 - Link GitHub repo
 - Set build command: `pip install -r requirements.txt`
 - Set start command: `uvicorn app.main:app --host 0.0.0.0 --port 8080`
-- Add env vars: `TRADIER_API_KEY`, `GOOGLE_CLOUD_PROJECT`
+- Add env vars: `TRADIER_API_KEY`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_APPLICATION_CREDENTIALS`, `OPTION_CHAINS_TABLE_ID`
 - Select free instance
 
 ## API

@@ -3,18 +3,20 @@
 # Entry point for FastAPI app and scheduler
 # =====================
 from fastapi import FastAPI
-from .scheduler import start_scheduler
-from .utils import setup_logging
+from contextlib import asynccontextmanager
+from datetime import datetime
+from app.scheduler import start_scheduler
+from app.utils import setup_logging
 from app.fetcher import fetch_option_chain, get_next_expirations, fetch_underlying_price
 from app.uploader import upload_to_bigquery
-from datetime import datetime
 
-app = FastAPI()
-
-@app.on_event("startup")
-def startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     setup_logging()
     start_scheduler()
+    yield  # Wait for app shutdown
+
+app = FastAPI(lifespan=lifespan)
 
 @app.get("/")
 def read_root():
@@ -28,8 +30,8 @@ def manual_fetch():
         return {"status": "no expirations found"}
     
     underlying_price = fetch_underlying_price()
-    
     logs = []
+
     for expiry in expirations:
         data = fetch_option_chain(expiration=expiry)
         if data:
