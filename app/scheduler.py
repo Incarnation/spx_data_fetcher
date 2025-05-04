@@ -15,11 +15,11 @@ def scheduled_job():
         logging.info(f"[{now}] Market closed — skipping fetch.")
         return
 
+    underlying_price = fetch_underlying_price()
     expirations = get_next_expirations()
     for expiry in expirations:
         logging.info(f"[{now}] Fetching options for {expiry}")
         data = fetch_option_chain(expiration=expiry)
-        underlying_price = fetch_underlying_price()
         if data:
             upload_to_bigquery(data, now, expiry, underlying_price)
             logging.info(f"Uploaded {len(data)} rows for {expiry}")
