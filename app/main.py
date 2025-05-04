@@ -18,7 +18,7 @@ def startup():
 
 @app.get("/")
 def read_root():
-    return {"status": "running", "refresh": "every 10 minutes during trading hours"}
+    return {"status": "running", "refresh": "every 15 minutes during trading hours"}
 
 @app.get("/manual-fetch")
 def manual_fetch():
