@@ -28,5 +28,5 @@ def scheduled_job():
 
 def start_scheduler():
     scheduler = BackgroundScheduler()
-    scheduler.add_job(scheduled_job, 'interval', minutes=10)
+    scheduler.add_job(scheduled_job, 'interval', minutes=15)
     scheduler.start()
