@@ -10,7 +10,7 @@ def upload_to_bigquery(options, timestamp, expiration):
     from dotenv import load_dotenv
     load_dotenv()
     project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
-    table_id = f"{project_id}.options.option_chain_snapshot"
+    table_id = f"{project_id}.option_chains_dataset.option_chain_snapshot"
 
     rows = []
     for opt in options:

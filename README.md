@@ -1,6 +1,3 @@
-# =====================
-# README.md
-# =====================
 # SPX Option Chain Data Fetcher
 
 This service fetches SPX option chain data from Tradier every 10 minutes **during U.S. trading hours** and uploads it to BigQuery.
