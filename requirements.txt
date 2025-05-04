@@ -8,3 +8,4 @@ pandas
 python-dotenv
 google-cloud-bigquery
 apscheduler
+pandas-gbq

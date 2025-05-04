@@ -5,6 +5,7 @@
 import os
 import pandas as pd
 from google.cloud import bigquery
+from pandas_gbq import to_gbq
 
 def upload_to_bigquery(options, timestamp, expiration):
     from dotenv import load_dotenv
@@ -49,4 +50,4 @@ def upload_to_bigquery(options, timestamp, expiration):
         })
 
     df = pd.DataFrame(rows)
-    df.to_gbq(table_id, if_exists="append")
+    to_gbq(df, table_id, if_exists="append")
