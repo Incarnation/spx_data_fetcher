@@ -9,6 +9,7 @@ from .fetcher import fetch_option_chain, get_next_expirations, fetch_underlying_
 from .uploader import upload_to_bigquery
 from .utils import is_market_open
 
+
 def scheduled_job():
     now = datetime.utcnow()
     if not is_market_open(now):
@@ -26,7 +27,8 @@ def scheduled_job():
         else:
             logging.warning(f"No data for {expiry}")
 
+
 def start_scheduler():
     scheduler = BackgroundScheduler()
-    scheduler.add_job(scheduled_job, 'interval', minutes=15)
+    scheduler.add_job(scheduled_job, "interval", minutes=15)
     scheduler.start()

@@ -10,17 +10,21 @@ from app.utils import setup_logging
 from app.fetcher import fetch_option_chain, get_next_expirations, fetch_underlying_price
 from app.uploader import upload_to_bigquery
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
     start_scheduler()
     yield  # Wait for app shutdown
 
+
 app = FastAPI(lifespan=lifespan)
+
 
 @app.get("/")
 def read_root():
     return {"status": "running", "refresh": "every 15 minutes during trading hours"}
+
 
 @app.get("/manual-fetch")
 def manual_fetch():
@@ -28,7 +32,7 @@ def manual_fetch():
     expirations = get_next_expirations()
     if not expirations:
         return {"status": "no expirations found"}
-    
+
     underlying_price = fetch_underlying_price()
     logs = []
 
