@@ -29,6 +29,7 @@ CLIENT = bigquery.Client(credentials=CREDENTIALS, project=PROJECT_ID)
 
 
 def calculate_and_store_realized_vol():
+    # Check if the market is open before proceeding
     if not is_trading_hours():
         logging.info("🛑 Skipping realized volatility calculation — market closed.")
         return

@@ -28,11 +28,10 @@ CLIENT = bigquery.Client(credentials=CREDENTIALS, project=PROJECT_ID)
 
 
 def calculate_and_store_gex():
-    """
+    # Check if the market is open before proceeding
     if not is_trading_hours():
-    logging.info("🛑 Skipping GEX calculation — market closed.")
-    return
-    """
+        logging.info("🛑 Skipping GEX calculation — market closed.")
+        return
 
     query = f"""
     WITH latest AS (
