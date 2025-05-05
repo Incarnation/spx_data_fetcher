@@ -27,7 +27,8 @@ def upload_to_bigquery(options, timestamp, expiration, underlying_price=None):
 
     rows = []
     for opt in options:
-        g = opt.get("greeks", {})
+        g = opt.get("greeks") or {}
+
         rows.append(
             {
                 "timestamp": timestamp,
@@ -67,7 +68,11 @@ def upload_to_bigquery(options, timestamp, expiration, underlying_price=None):
 
     try:
         to_gbq(
-            df, OPTION_TABLE_ID, project_id=PROJECT_ID, if_exists="append", credentials=credentials
+            df,
+            OPTION_TABLE_ID,
+            project_id=PROJECT_ID,
+            if_exists="append",
+            credentials=credentials,
         )
         logging.info(f"✅ Uploaded {len(df)} rows for {expiration}")
     except Exception as e:
