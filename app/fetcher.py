@@ -67,9 +67,9 @@ def fetch_option_chain(symbol: str, expiration: str, quote: dict):
         resp.raise_for_status()
         options = resp.json().get("options", {}).get("option", [])
 
-        # Filter 120 strikes closest to current price (±60)
+        # Filter 200 strikes closest to current price (±100)
         options = sorted(options, key=lambda x: abs(x.get("strike", 0) - current_price))
-        return options[:120]
+        return options[:200]
 
     except Exception as e:
         logging.error(f"[FETCH ERROR] Unable to fetch option chain for {symbol} {expiration}: {e}")
