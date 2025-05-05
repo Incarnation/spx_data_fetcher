@@ -1,0 +1,20 @@
+# railway.json (required by Railway for multiple services)
+{
+    "services": [
+        {
+            "name": "worker",
+            "sourceDir": "./",
+            "startCommand": "python workers/main.py",
+            "envs": "production"
+        },
+        {
+            "name": "dashboard",
+            "sourceDir": "./",
+            "startCommand": "python -m app",
+            "envs": "production",
+            "ports": [
+                8050
+            ]
+        }
+    ]
+}

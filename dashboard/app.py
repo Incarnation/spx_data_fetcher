@@ -1,76 +1,96 @@
-# =====================
-# dashboard/app.py
-# Dash app that visualizes SPX gamma exposure by strike, grouped by expiration
-# =====================
+# app.py
 import os
+from datetime import datetime
 
-import dash
-import plotly.graph_objs as go
-from dash import Input, Output, dcc, html
-from utils import get_available_expirations, get_gamma_exposure_df
+import pandas as pd
+from dash import Dash, Input, Output, dcc, html
+from utils.bq_queries import get_available_expirations, get_gamma_exposure_for_expiry
 
-app = dash.Dash(__name__)
-app.title = "SPX Gamma Exposure"
+# Initialize the Dash app
+app = Dash(__name__)
+app.title = "SPX Gamma Exposure Dashboard"
 
+# Layout: Structured into a heading, dropdown selector, and graph
 app.layout = html.Div(
-    [
-        html.H1("SPX Gamma Exposure by Strike", style={"textAlign": "center"}),
-        html.Div(
-            [
-                html.Label("Expiration Date:"),
-                dcc.Dropdown(
-                    id="expiration-dropdown",
-                    options=[{"label": e, "value": e} for e in get_available_expirations()],
-                    value=get_available_expirations()[0],
-                    clearable=False,
-                ),
-            ],
-            style={"width": "300px", "margin": "auto"},
+    style={"fontFamily": "Arial", "maxWidth": "1000px", "margin": "auto", "padding": "20px"},
+    children=[
+        html.H1("📈 SPX Gamma Exposure", style={"textAlign": "center"}),
+        html.P(
+            "Select an expiration date to view gamma exposure by strike.",
+            style={"textAlign": "center"},
+        ),
+        dcc.Dropdown(
+            id="expiration-dropdown",
+            options=[{"label": date, "value": date} for date in get_available_expirations()],
+            placeholder="Select an expiration date",
+            style={"marginBottom": "30px"},
         ),
         dcc.Graph(id="gex-chart"),
-        dcc.Interval(id="interval", interval=15 * 60 * 1000, n_intervals=0),
-    ]
+    ],
 )
 
 
+# Callback to update chart based on dropdown selection
 @app.callback(
     Output("gex-chart", "figure"),
-    [Input("interval", "n_intervals"), Input("expiration-dropdown", "value")],
+    Input("expiration-dropdown", "value"),
 )
-def update_chart(_, expiration):
-    df, current_price = get_gamma_exposure_df(expiration=expiration)
-    if df.empty or current_price is None:
-        return go.Figure().update_layout(title="No data available")
+def update_chart(expiration_date):
+    """
+    Called when the dropdown value changes. It retrieves data from BigQuery
+    and returns a Plotly figure showing gamma exposure by strike.
+    """
+    if not expiration_date:
+        return {
+            "layout": {
+                "title": "Please select an expiration date",
+                "xaxis": {"title": "Strike Price"},
+                "yaxis": {"title": "Net Gamma Exposure"},
+            }
+        }
 
-    df["distance"] = abs(df["strike"] - current_price)
-    df = df.sort_values("distance").head(150)
-    colors = ["green" if gex >= 0 else "red" for gex in df["gamma_exposure"]]
+    # Retrieve the data from BigQuery
+    df, spot_price = get_gamma_exposure_for_expiry(expiration_date)
 
-    fig = go.Figure(
-        data=[
-            go.Bar(
-                x=df["strike"], y=df["gamma_exposure"], marker_color=colors, name="Gamma Exposure"
-            ),
-            go.Scatter(
-                x=[current_price],
-                y=[0],
-                mode="markers+text",
-                name="SPX Price",
-                text=[f"SPX {current_price:.2f}"],
-                textposition="top center",
-                marker=dict(color="blue", size=12, symbol="line-ns-open"),
-            ),
-        ]
-    )
-    fig.update_layout(
-        xaxis_title="Strike Price",
-        yaxis_title="Net Gamma Exposure",
-        title=f"SPX GEX for {expiration}",
-        template="plotly_white",
-        margin=dict(l=40, r=40, t=50, b=40),
-    )
+    if df.empty:
+        return {
+            "layout": {
+                "title": f"No data available for {expiration_date}",
+                "xaxis": {"title": "Strike Price"},
+                "yaxis": {"title": "Net Gamma Exposure"},
+            }
+        }
+
+    # Create a Plotly line chart
+    fig = {
+        "data": [
+            {
+                "x": df["strike"],
+                "y": df["net_gamma_exposure"],
+                "type": "bar",
+                "name": "GEX",
+            }
+        ],
+        "layout": {
+            "title": f"Gamma Exposure on {expiration_date} | Spot ≈ {spot_price:.2f}",
+            "xaxis": {"title": "Strike Price"},
+            "yaxis": {"title": "Net Gamma Exposure", "tickformat": ",.0f"},
+            "shapes": [
+                {
+                    "type": "line",
+                    "x0": spot_price,
+                    "x1": spot_price,
+                    "y0": df["net_gamma_exposure"].min(),
+                    "y1": df["net_gamma_exposure"].max(),
+                    "line": {"color": "red", "dash": "dash"},
+                }
+            ],
+        },
+    }
+
     return fig
 
 
+# Run the app locally
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=8050)
+    app.run_server(debug=True, host="0.0.0.0", port=8050)

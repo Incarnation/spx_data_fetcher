@@ -5,13 +5,15 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy all project files
 COPY . .
 
-# 👇 Add this so `import app.*` works
+# Allow absolute imports from root (e.g., `from app.fetcher import ...`)
 ENV PYTHONPATH=/app
 
-# 👇 Set default entry point for worker
-CMD ["python", "workers/main.py"]
+# Default entrypoint for Dash (can be overridden in Railway service settings)
+CMD ["python", "app.py"]
