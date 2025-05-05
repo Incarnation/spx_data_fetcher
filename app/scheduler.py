@@ -18,16 +18,7 @@ from app.fetcher import (
     get_next_expirations,
 )
 from app.uploader import upload_index_price, upload_to_bigquery
-
-
-def is_trading_hours():
-    now = datetime.now(pytz.timezone("US/Eastern"))
-    return (
-        now.weekday() < 5
-        and (now.hour > 9 or (now.hour == 9 and now.minute >= 30))
-        and now.hour < 16
-    )
-
+from common.utils import is_trading_hours
 
 scheduler = BackgroundScheduler()
 
