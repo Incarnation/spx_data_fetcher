@@ -9,27 +9,22 @@ from pathlib import Path
 
 import pandas as pd
 from dotenv import load_dotenv
-from google.cloud import bigquery
-from google.oauth2 import service_account
 from pandas_gbq import to_gbq
 
 from common.auth import get_gcp_credentials
 
 # Load .env only if running locally (optional guard)
 if not (os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT")):
-    from pathlib import Path
-
     load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
 
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
-CREDENTIALS = get_gcp_credentials()
-CLIENT = bigquery.Client(credentials=CREDENTIALS, project=PROJECT_ID)
-
 OPTION_TABLE_ID = os.getenv("OPTION_CHAINS_TABLE_ID")
 INDEX_PRICE_TABLE_ID = os.getenv("INDEX_PRICE_TABLE_ID")
 
 
 def upload_to_bigquery(options, timestamp, expiration, underlying_price=None):
+    credentials = get_gcp_credentials()
+
     rows = []
     for opt in options:
         g = opt.get("greeks", {})
@@ -64,7 +59,7 @@ def upload_to_bigquery(options, timestamp, expiration, underlying_price=None):
                 "ask_iv": g.get("ask_iv"),
                 "mid_iv": g.get("mid_iv"),
                 "smv_vol": g.get("smv_vol"),
-                "underlying_price": underlying_price.get("last"),
+                "underlying_price": underlying_price.get("last") if underlying_price else None,
             }
         )
 
@@ -72,7 +67,7 @@ def upload_to_bigquery(options, timestamp, expiration, underlying_price=None):
 
     try:
         to_gbq(
-            df, OPTION_TABLE_ID, project_id=PROJECT_ID, if_exists="append", credentials=CREDENTIALS
+            df, OPTION_TABLE_ID, project_id=PROJECT_ID, if_exists="append", credentials=credentials
         )
         logging.info(f"✅ Uploaded {len(df)} rows for {expiration}")
     except Exception as e:
@@ -84,7 +79,9 @@ def upload_index_price(symbol: str, quote: dict):
         logging.warning(f"⚠️ Invalid quote for {symbol}")
         return
 
+    credentials = get_gcp_credentials()
     now = datetime.now(timezone.utc)
+
     df = pd.DataFrame(
         [
             {
@@ -102,6 +99,14 @@ def upload_index_price(symbol: str, quote: dict):
 
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
 
-    to_gbq(
-        df, INDEX_PRICE_TABLE_ID, project_id=PROJECT_ID, if_exists="append", credentials=CREDENTIALS
-    )
+    try:
+        to_gbq(
+            df,
+            INDEX_PRICE_TABLE_ID,
+            project_id=PROJECT_ID,
+            if_exists="append",
+            credentials=credentials,
+        )
+        logging.info(f"✅ Uploaded index price for {symbol}")
+    except Exception as e:
+        logging.error(f"❌ Failed to upload index price for {symbol}: {e}")

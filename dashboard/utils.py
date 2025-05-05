@@ -3,41 +3,42 @@
 # Utility to query BigQuery and calculate net gamma exposure
 # =====================
 import os
-from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 from dotenv import load_dotenv
 from google.cloud import bigquery
-from google.oauth2 import service_account
 
 from common.auth import get_gcp_credentials
 
 # Load .env only if running locally (optional guard)
 if not (os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT")):
-    from pathlib import Path
-
     load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
 
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
-CREDENTIALS = get_gcp_credentials()
-CLIENT = bigquery.Client(credentials=CREDENTIALS, project=PROJECT_ID)
 TABLE_ID = os.getenv("OPTION_CHAINS_TABLE_ID")
 
 
+def get_bigquery_client():
+    credentials = get_gcp_credentials()
+    return bigquery.Client(credentials=credentials, project=PROJECT_ID)
+
+
 def get_available_expirations():
+    client = get_bigquery_client()
     query = f"""
     SELECT DISTINCT expiration_date
     FROM `{TABLE_ID}`
     ORDER BY expiration_date DESC
     LIMIT 30
     """
-    df = CLIENT.query(query).to_dataframe()
+    df = client.query(query).to_dataframe()
     df["expiration_date"] = pd.to_datetime(df["expiration_date"])
     return df["expiration_date"].dt.strftime("%Y-%m-%d").tolist()
 
 
 def get_gamma_exposure_df(expiration):
+    client = get_bigquery_client()
     query = f"""
     SELECT
         strike,
@@ -53,8 +54,7 @@ def get_gamma_exposure_df(expiration):
         WHERE expiration_date = "{expiration}"
     )
     """
-
-    df = CLIENT.query(query).to_dataframe()
+    df = client.query(query).to_dataframe()
     if df.empty:
         return pd.DataFrame(), None
 

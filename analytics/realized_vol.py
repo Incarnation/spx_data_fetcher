@@ -14,18 +14,16 @@ from pandas_gbq import to_gbq
 
 from common.auth import get_gcp_credentials
 
-# Load .env only if running locally (optional guard)
+# Load .env only if running locally
 if not (os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT")):
-    from pathlib import Path
-
     load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
 
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
-CREDENTIALS = get_gcp_credentials()
-CLIENT = bigquery.Client(credentials=CREDENTIALS, project=PROJECT_ID)
 
 
 def calculate_and_store_realized_vol():
+    credentials = get_gcp_credentials()
+    client = bigquery.Client(credentials=credentials, project=PROJECT_ID)
 
     query = f"""
     SELECT *
@@ -33,7 +31,7 @@ def calculate_and_store_realized_vol():
     WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY)
     ORDER BY symbol, timestamp
     """
-    df = CLIENT.query(query).to_dataframe()
+    df = client.query(query).to_dataframe()
     if df.empty:
         logging.warning("⚠️ No data found in index_price_snapshot. Exiting.")
         return
@@ -49,11 +47,10 @@ def calculate_and_store_realized_vol():
         # 1D realized volatility (5 min intervals → ~78 per day)
         group["vol_1d"] = group["log_return"].rolling(window=78).std() * np.sqrt(78)
 
-        # Drop rows with NaNs from rolling std
         clean = group.dropna(subset=["vol_1h", "vol_1d"])
         if clean.empty:
             logging.warning(f"⚠️ Not enough data to compute volatility for {symbol}")
-            continue  # Not enough data
+            continue
 
         last_row = clean.iloc[-1]
         results.append(
@@ -69,6 +66,6 @@ def calculate_and_store_realized_vol():
         vol_df = pd.DataFrame(results)
         logging.info(f"📤 Uploading {len(vol_df)} realized volatility rows to BigQuery...")
         table_id = f"{PROJECT_ID}.analytics.realized_volatility"
-        to_gbq(vol_df, table_id, project_id=PROJECT_ID, if_exists="append", credentials=CREDENTIALS)
+        to_gbq(vol_df, table_id, project_id=PROJECT_ID, if_exists="append", credentials=credentials)
     else:
         logging.info("📭 No volatility records to upload.")
