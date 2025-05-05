@@ -1,4 +1,3 @@
-# railway.json (required by Railway for multiple services)
 {
     "services": [
         {
