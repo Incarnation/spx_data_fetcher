@@ -13,7 +13,7 @@ from google.cloud import bigquery
 from google.oauth2 import service_account
 from pandas_gbq import to_gbq
 
-from app.utils import is_trading_hours
+from common.utils import is_market_open
 
 # Load .env only if running locally (optional guard)
 if os.getenv("RENDER") is None:

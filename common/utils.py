@@ -1,10 +1,12 @@
 # =====================
-# app/utils.py
+# common/utils.py
 # Common utility functions like logging setup and market hours check
 # =====================
 import logging
 import os
 from datetime import datetime
+
+import pytz
 
 
 def setup_logging():
@@ -24,9 +26,10 @@ def setup_logging():
     logging.basicConfig(level=logging.INFO, handlers=[file_handler, console_handler])
 
 
-def is_market_open(now=None):
-    if now is None:
-        now = datetime.utcnow()
-    is_weekday = now.weekday() < 5
-    is_open_time = (now.hour > 13 or (now.hour == 13 and now.minute >= 30)) and now.hour < 20
-    return is_weekday and is_open_time
+def is_trading_hours():
+    now = datetime.now(pytz.timezone("US/Eastern"))
+    return (
+        now.weekday() < 5
+        and (now.hour > 9 or (now.hour == 9 and now.minute >= 30))
+        and now.hour < 16
+    )

@@ -6,7 +6,7 @@ import logging
 import time
 
 from app.scheduler import start_scheduler
-from app.utils import setup_logging
+from common.utils import setup_logging
 
 if __name__ == "__main__":
     setup_logging()

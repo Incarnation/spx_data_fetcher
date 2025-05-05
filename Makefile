@@ -27,8 +27,8 @@ test:
 	pytest tests/
 
 lint:
-	black app/ dashboard/ tests/ analytics/ workers/
-	isort app/ dashboard/ tests/ analytics/ workers/
+	black app/ dashboard/ tests/ analytics/ workers/ common/
+	isort app/ dashboard/ tests/ analytics/ workers/ common/
 
 # === DOCKER ===
 docker-build:

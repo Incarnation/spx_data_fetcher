@@ -2,6 +2,8 @@
 # app/main.py
 # Entry point for FastAPI app and scheduler with lifespan
 # =====================
+
+"""
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -53,3 +55,4 @@ def manual_fetch():
                 logs.append(f"No data for {symbol} {expiry}")
 
     return {"status": "manual fetch complete", "details": logs}
+"""
