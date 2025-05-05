@@ -1,7 +1,4 @@
-# =====================
 # analytics/gex_calculator.py
-# Precomputes gamma exposure for each symbol/expiration
-# =====================
 import os
 from pathlib import Path
 
@@ -11,18 +8,16 @@ from pandas_gbq import to_gbq
 
 from common.auth import get_gcp_credentials
 
-# Load .env only if running locally (optional guard)
+# Load .env only if running locally
 if not (os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT")):
-    from pathlib import Path
-
     load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
 
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
-CREDENTIALS = get_gcp_credentials()
-CLIENT = bigquery.Client(credentials=CREDENTIALS, project=PROJECT_ID)
 
 
 def calculate_and_store_gex():
+    credentials = get_gcp_credentials()
+    client = bigquery.Client(credentials=credentials, project=PROJECT_ID)
 
     query = f"""
     WITH latest AS (
@@ -42,9 +37,9 @@ def calculate_and_store_gex():
     GROUP BY a.symbol, a.expiration_date, a.strike, a.timestamp, a.underlying_price
     """
 
-    df = CLIENT.query(query).to_dataframe()
+    df = client.query(query).to_dataframe()
     if df.empty:
         return
 
     table_id = f"{PROJECT_ID}.analytics.gamma_exposure"
-    to_gbq(df, table_id, project_id=PROJECT_ID, if_exists="append", credentials=CREDENTIALS)
+    to_gbq(df, table_id, project_id=PROJECT_ID, if_exists="append", credentials=credentials)
