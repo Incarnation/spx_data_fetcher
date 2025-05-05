@@ -2,45 +2,35 @@
 # utils/bq_queries.py
 # BigQuery utility functions for Dash gamma dashboard
 # =====================
-import json
+
 import os
-from datetime import datetime
 
 import pandas as pd
 from dotenv import load_dotenv
 from google.cloud import bigquery
-from google.oauth2 import service_account
 
-# Load .env if running locally
+from common.auth import get_gcp_credentials
+
+# Load .env only in local development
 if not (os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT")):
     from pathlib import Path
 
     load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
 
-# Load project ID and credentials
+# Project and table config
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
-SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
-
-# Authenticate with Google Cloud
-if not SERVICE_ACCOUNT_JSON:
-    raise EnvironmentError("Missing GOOGLE_SERVICE_ACCOUNT_JSON environment variable")
-
-
-credentials_info = service_account.Credentials.from_service_account_info(
-    json.loads(SERVICE_ACCOUNT_JSON)
-)
-
-
-CLIENT = bigquery.Client(credentials=credentials_info, project=PROJECT_ID)
-
-# Name of the gamma exposure table
 TABLE_ID = f"{PROJECT_ID}.analytics.gamma_exposure"
+
+# Create BigQuery client using proper credentials
+CREDENTIALS = get_gcp_credentials()
+CLIENT = bigquery.Client(credentials=CREDENTIALS, project=PROJECT_ID)
 
 
 def get_available_expirations():
     """
-    Fetch distinct expiration dates from the gamma exposure table.
-    Sorted in descending order (most recent first).
+    Returns a list of recent expiration dates available in the gamma exposure table.
+    Returns:
+        List[str]: Dates in YYYY-MM-DD format.
     """
     query = f"""
         SELECT DISTINCT expiration_date
@@ -52,16 +42,15 @@ def get_available_expirations():
     return df["expiration_date"].dt.strftime("%Y-%m-%d").tolist()
 
 
-def get_gamma_exposure_df(expiration_date: str):
+def get_gamma_exposure_for_expiry(expiration_date: str):
     """
-    Fetch gamma exposure values for a given expiration date.
+    Retrieves net gamma exposure by strike for a specific expiration date.
 
-    Parameters:
-        expiration_date (str): The expiration date in 'YYYY-MM-DD' format.
+    Args:
+        expiration_date (str): The target expiration date (format: YYYY-MM-DD).
 
     Returns:
-        pd.DataFrame: Gamma exposure aggregated by strike.
-        float: Median underlying price for the snapshot.
+        Tuple[pd.DataFrame, float]: Gamma exposure DataFrame and current spot price.
     """
     query = f"""
         SELECT strike, net_gamma_exposure, underlying_price
@@ -74,11 +63,11 @@ def get_gamma_exposure_df(expiration_date: str):
         )
     """
     df = CLIENT.query(query).to_dataframe()
+
     if df.empty:
         return pd.DataFrame(), None
 
-    # Group net gamma exposure by strike
-    gex_by_strike = df.groupby("strike")["net_gamma_exposure"].sum().reset_index()
-    # Use median price as the most stable underlying reference
+    grouped = df.groupby("strike")["net_gamma_exposure"].sum().reset_index()
     current_price = df["underlying_price"].dropna().median()
-    return gex_by_strike, current_price
+
+    return grouped, current_price
