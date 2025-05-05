@@ -4,26 +4,33 @@
 # =====================
 import logging
 import os
+from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
 
 # Load .env only if running locally (optional guard)
 if not (os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT")):
-    from pathlib import Path
-
     load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
 
-TRADIER_API_KEY = os.getenv("TRADIER_API_KEY")
-HEADERS = {"Authorization": f"Bearer {TRADIER_API_KEY}", "Accept": "application/json"}
 BASE_URL = "https://api.tradier.com/v1/markets"
 CONTRACT_MULTIPLIER = 100
 SUPPORTED_SYMBOLS = ["SPX", "SPY", "QQQ"]
 
 
+def get_auth_headers():
+    api_key = os.getenv("TRADIER_API_KEY")
+    if not api_key:
+        logging.error("🚫 TRADIER_API_KEY is missing! Make sure it's set in your environment.")
+        return {}
+    return {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
+
+
 def fetch_underlying_quote(symbol: str) -> dict:
     try:
-        resp = requests.get(f"{BASE_URL}/quotes", headers=HEADERS, params={"symbols": symbol})
+        resp = requests.get(
+            f"{BASE_URL}/quotes", headers=get_auth_headers(), params={"symbols": symbol}
+        )
         resp.raise_for_status()
         return resp.json().get("quotes", {}).get("quote", {})
     except Exception as e:
@@ -35,7 +42,7 @@ def get_next_expirations(symbol: str, limit: int = 20):
     try:
         resp = requests.get(
             f"{BASE_URL}/options/expirations",
-            headers=HEADERS,
+            headers=get_auth_headers(),
             params={"symbol": symbol, "includeAllRoots": "true", "strikes": "false"},
         )
         resp.raise_for_status()
@@ -54,13 +61,13 @@ def fetch_option_chain(symbol: str, expiration: str, quote: dict):
 
         resp = requests.get(
             f"{BASE_URL}/options/chains",
-            headers=HEADERS,
+            headers=get_auth_headers(),
             params={"symbol": symbol, "expiration": expiration, "greeks": "true"},
         )
         resp.raise_for_status()
         options = resp.json().get("options", {}).get("option", [])
 
-        # Step 3: Filter 120 strikes closest to current price (±60)
+        # Filter 120 strikes closest to current price (±60)
         options = sorted(options, key=lambda x: abs(x.get("strike", 0) - current_price))
         return options[:120]
 
