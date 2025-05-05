@@ -58,7 +58,7 @@ def scheduled_fetch():
 
 
 def start_scheduler():
-    scheduler.add_job(debug_heartbeat, "interval", minutes=1)
+    scheduler.add_job(debug_heartbeat, "interval", minutes=5)
     scheduler.add_job(scheduled_fetch, "interval", minutes=10)
     scheduler.add_job(calculate_and_store_gex, "interval", minutes=10)
     scheduler.add_job(calculate_and_store_realized_vol, "interval", minutes=10)

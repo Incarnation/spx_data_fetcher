@@ -2,6 +2,7 @@
 # analytics/gex_calculator.py
 # Precomputes gamma exposure for each symbol/expiration
 # =====================
+import logging
 import os
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from dotenv import load_dotenv
 from google.cloud import bigquery
 from google.oauth2 import service_account
 from pandas_gbq import to_gbq
+
+from app.utils import is_trading_hours
 
 # Load .env only if running locally (optional guard)
 if os.getenv("RENDER") is None:
@@ -25,6 +28,12 @@ CLIENT = bigquery.Client(credentials=CREDENTIALS, project=PROJECT_ID)
 
 
 def calculate_and_store_gex():
+    """
+    if not is_trading_hours():
+    logging.info("🛑 Skipping GEX calculation — market closed.")
+    return
+    """
+
     query = f"""
     WITH latest AS (
         SELECT symbol, expiration_date, MAX(timestamp) AS ts
