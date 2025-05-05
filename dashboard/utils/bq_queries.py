@@ -6,16 +6,9 @@
 import os
 
 import pandas as pd
-from dotenv import load_dotenv
 from google.cloud import bigquery
 
 from common.auth import get_gcp_credentials
-
-# Load .env only in local development
-if not (os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT")):
-    from pathlib import Path
-
-    load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
 
 # Project and table config
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
@@ -39,6 +32,10 @@ def get_available_expirations():
         LIMIT 30
     """
     df = CLIENT.query(query).to_dataframe()
+
+    # 👇 Ensure expiration_date is a datetime column
+    df["expiration_date"] = pd.to_datetime(df["expiration_date"])
+
     return df["expiration_date"].dt.strftime("%Y-%m-%d").tolist()
 
 
