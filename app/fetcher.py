@@ -31,7 +31,7 @@ def fetch_underlying_quote(symbol: str) -> dict:
         return {}
 
 
-def get_next_expirations(symbol: str, limit: int = 30):
+def get_next_expirations(symbol: str, limit: int = 20):
     try:
         resp = requests.get(
             f"{BASE_URL}/options/expirations",
