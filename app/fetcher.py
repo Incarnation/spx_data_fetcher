@@ -4,7 +4,6 @@
 # =====================
 import logging
 import os
-from datetime import datetime
 
 import requests
 from dotenv import load_dotenv
@@ -32,7 +31,7 @@ def fetch_underlying_quote(symbol: str) -> dict:
         return {}
 
 
-def get_next_expirations(symbol: str, limit: int = 3):
+def get_next_expirations(symbol: str, limit: int = 30):
     try:
         resp = requests.get(
             f"{BASE_URL}/options/expirations",
@@ -46,16 +45,24 @@ def get_next_expirations(symbol: str, limit: int = 3):
         return []
 
 
-def fetch_option_chain(symbol: str, expiration: str):
+def fetch_option_chain(symbol: str, expiration: str, quote: dict):
     try:
+        current_price = quote.get("last")
+        if current_price is None:
+            logging.warning(f"⚠️ Missing current price for {symbol}, skipping strike filter.")
+            return []
+
         resp = requests.get(
             f"{BASE_URL}/options/chains",
             headers=HEADERS,
             params={"symbol": symbol, "expiration": expiration, "greeks": "true"},
         )
         resp.raise_for_status()
-        data = resp.json()
-        return data.get("options", {}).get("option", [])
+        options = resp.json().get("options", {}).get("option", [])
+
+        # Step 3: Filter 120 strikes closest to current price (±60)
+        options = sorted(options, key=lambda x: abs(x.get("strike", 0) - current_price))
+        return options[:120]
 
     except Exception as e:
         logging.error(f"[FETCH ERROR] Unable to fetch option chain for {symbol} {expiration}: {e}")

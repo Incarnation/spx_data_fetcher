@@ -13,8 +13,6 @@ from google.cloud import bigquery
 from google.oauth2 import service_account
 from pandas_gbq import to_gbq
 
-from common.utils import is_trading_hours
-
 # Load .env only if running locally (optional guard)
 if os.getenv("RENDER") is None:
     from pathlib import Path
@@ -29,10 +27,6 @@ CLIENT = bigquery.Client(credentials=CREDENTIALS, project=PROJECT_ID)
 
 
 def calculate_and_store_realized_vol():
-    # Check if the market is open before proceeding
-    if not is_trading_hours():
-        logging.info("🛑 Skipping realized volatility calculation — market closed.")
-        return
 
     query = f"""
     SELECT *

@@ -4,7 +4,7 @@
 # Also schedules analytics jobs
 # =====================
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -32,7 +32,7 @@ def scheduled_fetch():
         logging.info("⏳ Market closed, skipping fetch.")
         return
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     for symbol in SUPPORTED_SYMBOLS:
         expirations = get_next_expirations(symbol)
@@ -40,7 +40,7 @@ def scheduled_fetch():
         upload_index_price(symbol, underlying_quote)
 
         for expiry in expirations:
-            options = fetch_option_chain(symbol, expiry)
+            options = fetch_option_chain(symbol, expiry, underlying_quote)
             if options:
                 upload_to_bigquery(options, now, expiry, underlying_quote)
                 logging.info(f"✅ {symbol} {expiry} - {len(options)} options uploaded.")
@@ -51,8 +51,12 @@ def scheduled_fetch():
 def start_scheduler():
     scheduler.add_job(debug_heartbeat, "interval", minutes=5)
     scheduler.add_job(scheduled_fetch, "interval", minutes=10)
-    scheduler.add_job(calculate_and_store_gex, "interval", minutes=10)
-    scheduler.add_job(calculate_and_store_realized_vol, "interval", minutes=10)
+    scheduler.add_job(
+        lambda: is_trading_hours() and calculate_and_store_gex(), "interval", minutes=10
+    )
+    scheduler.add_job(
+        lambda: is_trading_hours() and calculate_and_store_realized_vol(), "interval", minutes=10
+    )
     scheduler.start()
     logging.info("📅 Scheduler started: fetch every 10m, analytics every 10m")
 
