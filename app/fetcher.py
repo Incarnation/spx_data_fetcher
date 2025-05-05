@@ -9,7 +9,7 @@ import requests
 from dotenv import load_dotenv
 
 # Load .env only if running locally (optional guard)
-if os.getenv("RENDER") is None:
+if not (os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT")):
     from pathlib import Path
 
     load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
