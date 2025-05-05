@@ -13,6 +13,7 @@ from google.cloud import bigquery
 from pandas_gbq import to_gbq
 
 from common.auth import get_gcp_credentials
+from common.utils import is_trading_hours
 
 # Load .env only if running locally
 if not (os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT")):
@@ -22,6 +23,10 @@ PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
 
 
 def calculate_and_store_realized_vol():
+    if not is_trading_hours():
+        logging.info("⏳ Market closed, skipping calculate_and_store_realized_vol.")
+        return
+
     credentials = get_gcp_credentials()
     client = bigquery.Client(credentials=credentials, project=PROJECT_ID)
 

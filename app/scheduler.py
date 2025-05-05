@@ -28,9 +28,9 @@ def debug_heartbeat():
 
 
 def scheduled_fetch():
-    # if not is_trading_hours():
-    # logging.info("⏳ Market closed, skipping fetch.")
-    # return
+    if not is_trading_hours():
+        logging.info("⏳ Market closed, skipping fetch.")
+        return
 
     now = datetime.now(timezone.utc)
 

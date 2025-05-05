@@ -15,7 +15,7 @@ if not (os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT")):
 
 BASE_URL = "https://api.tradier.com/v1/markets"
 CONTRACT_MULTIPLIER = 100
-SUPPORTED_SYMBOLS = ["SPX", "SPY", "QQQ"]
+SUPPORTED_SYMBOLS = ["SPX"]
 
 
 def get_auth_headers():
