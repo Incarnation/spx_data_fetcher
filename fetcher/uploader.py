@@ -1,25 +1,15 @@
 # =====================
-# app/uploader.py
+# fetcher/uploader.py
 # Upload options and index price to BigQuery (with explicit credentials)
 # =====================
 import logging
-import os
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pandas as pd
-from dotenv import load_dotenv
 from pandas_gbq import to_gbq
 
 from common.auth import get_gcp_credentials
-
-# Load .env only if running locally (optional guard)
-if not (os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT")):
-    load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
-
-PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
-OPTION_TABLE_ID = os.getenv("OPTION_CHAINS_TABLE_ID")
-INDEX_PRICE_TABLE_ID = os.getenv("INDEX_PRICE_TABLE_ID")
+from common.config import GOOGLE_CLOUD_PROJECT, INDEX_PRICE_TABLE_ID, OPTION_CHAINS_TABLE_ID
 
 
 def upload_to_bigquery(options, timestamp, expiration, underlying_price=None):
@@ -69,8 +59,8 @@ def upload_to_bigquery(options, timestamp, expiration, underlying_price=None):
     try:
         to_gbq(
             df,
-            OPTION_TABLE_ID,
-            project_id=PROJECT_ID,
+            OPTION_CHAINS_TABLE_ID,
+            project_id=GOOGLE_CLOUD_PROJECT,
             if_exists="append",
             credentials=credentials,
         )
@@ -108,7 +98,7 @@ def upload_index_price(symbol: str, quote: dict):
         to_gbq(
             df,
             INDEX_PRICE_TABLE_ID,
-            project_id=PROJECT_ID,
+            project_id=GOOGLE_CLOUD_PROJECT,
             if_exists="append",
             credentials=credentials,
         )

@@ -1,0 +1,17 @@
+# Ignore Python cache and virtualenvs
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.env
+.env.*
+venv/
+.envrc
+.idea/
+.vscode/
+.DS_Store
+.git
+.gitignore
+tests/
+logs/
+*.log

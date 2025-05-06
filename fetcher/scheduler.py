@@ -1,24 +1,19 @@
 # =====================
-# app/scheduler.py
+# fetcher/scheduler.py
 # Runs fetch every 10 minutes during trading hours for multiple symbols
 # Also schedules analytics jobs
 # =====================
 import logging
 from datetime import datetime, timezone
 
-import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from analytics.gex_calculator import calculate_and_store_gex
 from analytics.realized_vol import calculate_and_store_realized_vol
-from app.fetcher import (
-    SUPPORTED_SYMBOLS,
-    fetch_option_chain,
-    fetch_underlying_quote,
-    get_next_expirations,
-)
-from app.uploader import upload_index_price, upload_to_bigquery
+from common.config import SUPPORTED_SYMBOLS
 from common.utils import is_trading_hours
+from fetcher.fetcher import fetch_option_chain, fetch_underlying_quote, get_next_expirations
+from fetcher.uploader import upload_index_price, upload_to_bigquery
 
 scheduler = BackgroundScheduler()
 

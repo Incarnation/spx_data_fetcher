@@ -3,24 +3,27 @@
 # Background scheduler for data fetching and analytics
 # =====================
 import logging
-import os
 import time
 
-from app.scheduler import start_scheduler
+from common.config import GOOGLE_CLOUD_PROJECT, GOOGLE_SERVICE_ACCOUNT_JSON, OPTION_CHAINS_TABLE_ID
 from common.utils import setup_logging
+from fetcher.scheduler import start_scheduler
 
 if __name__ == "__main__":
     setup_logging()
     logging.info("📡 Background scheduler starting...")
 
-    required_env_vars = [
-        "GOOGLE_SERVICE_ACCOUNT_JSON",
-        "GOOGLE_CLOUD_PROJECT",
-        "OPTION_CHAINS_TABLE_ID",
-    ]
-    missing = [var for var in required_env_vars if not os.getenv(var)]
+    # Optional: double-check config presence (though common.config already does this)
+    missing = []
+    if not GOOGLE_CLOUD_PROJECT:
+        missing.append("GOOGLE_CLOUD_PROJECT")
+    if not OPTION_CHAINS_TABLE_ID:
+        missing.append("OPTION_CHAINS_TABLE_ID")
+    if not GOOGLE_SERVICE_ACCOUNT_JSON:
+        missing.append("GOOGLE_SERVICE_ACCOUNT_JSON")
+
     if missing:
-        raise EnvironmentError(f"❌ Missing required environment variables: {', '.join(missing)}")
+        raise EnvironmentError(f"❌ Missing required configuration: {', '.join(missing)}")
 
     try:
         start_scheduler()

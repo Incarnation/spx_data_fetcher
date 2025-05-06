@@ -3,23 +3,23 @@
 # BigQuery utility functions for Dash gamma dashboard
 # =====================
 
-import os
+import logging
+from typing import List, Optional, Tuple
 
 import pandas as pd
 from google.cloud import bigquery
 
 from common.auth import get_gcp_credentials
+from common.config import GOOGLE_CLOUD_PROJECT
 
-# Project and table config
-PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
-TABLE_ID = f"{PROJECT_ID}.analytics.gamma_exposure"
+TABLE_ID = f"{GOOGLE_CLOUD_PROJECT}.analytics.gamma_exposure"
 
 # Create BigQuery client using proper credentials
 CREDENTIALS = get_gcp_credentials()
-CLIENT = bigquery.Client(credentials=CREDENTIALS, project=PROJECT_ID)
+CLIENT = bigquery.Client(credentials=CREDENTIALS, project=GOOGLE_CLOUD_PROJECT)
 
 
-def get_available_expirations():
+def get_available_expirations() -> List[str]:
     """
     Returns a list of recent expiration dates available in the gamma exposure table.
     Returns:
@@ -39,7 +39,7 @@ def get_available_expirations():
     return df["expiration_date"].dt.strftime("%Y-%m-%d").tolist()
 
 
-def get_gamma_exposure_for_expiry(expiration_date: str):
+def get_gamma_exposure_for_expiry(expiration_date: str) -> Tuple[pd.DataFrame, Optional[float]]:
     """
     Retrieves net gamma exposure by strike for a specific expiration date.
 
@@ -65,6 +65,10 @@ def get_gamma_exposure_for_expiry(expiration_date: str):
         return pd.DataFrame(), None
 
     grouped = df.groupby("strike")["net_gamma_exposure"].sum().reset_index()
-    current_price = df["underlying_price"].dropna().median()
+    current_price_series = df["underlying_price"].dropna()
+    current_price = current_price_series.median() if not current_price_series.empty else None
+
+    if current_price is None:
+        logging.warning(f"No underlying price available for {expiration_date}")
 
     return grouped, current_price

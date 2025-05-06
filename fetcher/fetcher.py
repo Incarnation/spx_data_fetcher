@@ -1,29 +1,19 @@
 # =====================
-# app/fetcher.py
-# Refactored to support multiple symbols: SPX, SPY, QQQ, NDX
+# fetcher/fetcher.py
+# Refactored to support multiple symbols: SPX
 # =====================
 import logging
-import os
-from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
 
-# Load .env only if running locally (optional guard)
-if not (os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT")):
-    load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
-
-BASE_URL = "https://api.tradier.com/v1/markets"
-CONTRACT_MULTIPLIER = 100
-SUPPORTED_SYMBOLS = ["SPX"]
+from common.config import BASE_URL, TRADIER_API_KEY
 
 
 def get_auth_headers():
-    api_key = os.getenv("TRADIER_API_KEY")
-    if not api_key:
+    if not TRADIER_API_KEY:
         logging.error("🚫 TRADIER_API_KEY is missing! Make sure it's set in your environment.")
         return {}
-    return {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
+    return {"Authorization": f"Bearer {TRADIER_API_KEY}", "Accept": "application/json"}
 
 
 def fetch_underlying_quote(symbol: str) -> dict:

@@ -1,5 +1,5 @@
 # =====================
-# app/main.py
+# fetcher/main.py
 # Entry point for FastAPI app and scheduler with lifespan
 # =====================
 

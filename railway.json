@@ -9,7 +9,7 @@
         {
             "name": "dashboard",
             "sourceDir": "./",
-            "startCommand": "python -m app",
+            "startCommand": "python dashboard/main.py",
             "envs": "production",
             "ports": [
                 8050
