@@ -2,6 +2,7 @@
 # analytics/realized_vol.py
 # Computes short-term realized volatility from index prices
 # =====================
+
 import logging
 
 import numpy as np
@@ -12,6 +13,17 @@ from pandas_gbq import to_gbq
 from common.auth import get_gcp_credentials
 from common.config import GOOGLE_CLOUD_PROJECT
 from common.utils import is_trading_hours
+
+
+def is_us_trading_hour(ts_utc):
+    """
+    Returns True if the UTC timestamp falls between 9:30am–4:00pm Eastern Time.
+    """
+    ts_est = ts_utc.tz_convert("America/New_York")
+    return ts_est.weekday() < 5 and (
+        ts_est.time() >= pd.Timestamp("09:30").time()
+        and ts_est.time() <= pd.Timestamp("16:00").time()
+    )
 
 
 def calculate_and_store_realized_vol():
@@ -36,12 +48,19 @@ def calculate_and_store_realized_vol():
 
         results = []
         for symbol, group in df.groupby("symbol"):
+            group["timestamp"] = pd.to_datetime(group["timestamp"], utc=True)
             group = group.sort_values("timestamp")
+
+            # 👇 Filter to only U.S. trading hours (Eastern Time)
+            group = group[group["timestamp"].apply(is_us_trading_hour)]
+
             group["log_return"] = np.log(group["last"] / group["last"].shift(1))
 
-            # 10-min intervals → 6 samples/hour, 39/day
-            group["vol_1h"] = group["log_return"].rolling(window=6).std() * np.sqrt(6)
-            group["vol_1d"] = group["log_return"].rolling(window=39).std() * np.sqrt(39)
+            # 1H realized volatility (5 min intervals → 12 samples/hour)
+            group["vol_1h"] = group["log_return"].rolling(window=12).std() * np.sqrt(12)
+
+            # 1D realized volatility (5 min intervals → ~78 per day)
+            group["vol_1d"] = group["log_return"].rolling(window=78).std() * np.sqrt(78)
 
             clean = group.dropna(subset=["vol_1h", "vol_1d"])
             if clean.empty:
@@ -72,5 +91,6 @@ def calculate_and_store_realized_vol():
             )
         else:
             logging.info("📭 No volatility records to upload.")
+
     except Exception as e:
         logging.exception(f"💥 Error in calculate_and_store_realized_vol: {e}")
