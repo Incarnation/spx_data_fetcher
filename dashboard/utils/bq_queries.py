@@ -8,6 +8,7 @@ from typing import List, Optional, Tuple
 
 import pandas as pd
 from google.cloud import bigquery
+from plotly.graph_objects import Figure, Scatter
 
 from common.auth import get_gcp_credentials
 from common.config import GOOGLE_CLOUD_PROJECT
@@ -72,3 +73,33 @@ def get_gamma_exposure_for_expiry(expiration_date: str) -> Tuple[pd.DataFrame, O
         logging.warning(f"No underlying price available for {expiration_date}")
 
     return grouped, current_price
+
+
+def get_realized_volatility():
+    """
+    Returns a Plotly figure for most recent 1H and 1D realized vol for all symbols.
+    """
+    query = f"""
+        SELECT *
+        FROM `{GOOGLE_CLOUD_PROJECT}.analytics.realized_volatility`
+        WHERE timestamp = (
+            SELECT MAX(timestamp)
+            FROM `{GOOGLE_CLOUD_PROJECT}.analytics.realized_volatility`
+        )
+    """
+    df = CLIENT.query(query).to_dataframe()
+    if df.empty:
+        return Figure(layout={"title": "No realized volatility data found."})
+
+    fig = Figure()
+    fig.add_trace(Scatter(x=df["symbol"], y=df["vol_1h"], name="1H Vol", mode="lines+markers"))
+    fig.add_trace(Scatter(x=df["symbol"], y=df["vol_1d"], name="1D Vol", mode="lines+markers"))
+
+    fig.update_layout(
+        title="Realized Volatility (Most Recent)",
+        xaxis_title="Symbol",
+        yaxis_title="Volatility (Annualized)",
+        template="plotly_white",
+        height=400,
+    )
+    return fig
