@@ -1,6 +1,6 @@
 # =====================
 # dashboard/main.py
-# Dash app for SPX Gamma Exposure & Realized Volatility
+# Dash app for SPX Gamma Exposure Visualization
 # =====================
 import os
 import sys
@@ -8,29 +8,28 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Enable absolute imports from project root
+# Enable absolute imports
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-# Load .env in local dev
+# Load .env in dev
 if not (os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT")):
     load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
 
 from dash import Dash, Input, Output, callback, dcc, html
 from flask_caching import Cache
-from plotly.graph_objects import Bar, Figure
+from plotly.graph_objects import Bar, Figure, Surface
 from utils.bq_queries import (
     get_available_expirations,
     get_gamma_exposure_for_expiry,
-    get_realized_volatility,
+    get_gamma_exposure_surface_data,
 )
 
-# Initialize Dash
+# Init Dash app
 app = Dash(__name__)
-app.title = "📊 SPX Options Dashboard"
+app.title = "📊 SPX Gamma Exposure Dashboard"
 cache = Cache(app.server, config={"CACHE_TYPE": "SimpleCache"})
 
 
-# Cached expiration dropdown values
 @cache.memoize(timeout=300)
 def get_cached_expirations():
     return get_available_expirations()[::-1]
@@ -38,30 +37,28 @@ def get_cached_expirations():
 
 # Layout
 app.layout = html.Div(
-    style={"fontFamily": "Arial", "maxWidth": "1000px", "margin": "auto", "padding": "20px"},
+    style={"fontFamily": "Arial", "maxWidth": "1100px", "margin": "auto", "padding": "20px"},
     children=[
-        html.H1("📈 SPX Gamma Exposure + Volatility", style={"textAlign": "center"}),
+        html.H1("📈 SPX Gamma Exposure", style={"textAlign": "center"}),
         html.P(
-            "Select an expiration date to view gamma exposure by strike.",
+            "Select expiration date to view gamma exposure by strike.",
             style={"textAlign": "center"},
         ),
         dcc.Dropdown(
             id="expiration-dropdown",
             options=[{"label": date, "value": date} for date in get_cached_expirations()],
-            placeholder="Select an expiration date",
+            placeholder="Select expiration date",
             clearable=False,
             style={"marginBottom": "30px"},
         ),
         dcc.Loading(dcc.Graph(id="gex-chart")),
         html.Hr(),
-        html.H3("📉 Latest Realized Volatility", style={"textAlign": "center"}),
-        dcc.Loading(dcc.Graph(id="vol-chart")),
-        dcc.Interval(id="vol-refresh", interval=5 * 60 * 1000, n_intervals=0),
+        html.H3("🎯 Gamma Exposure Surface (Strike × Expiry × GEX)", style={"textAlign": "center"}),
+        dcc.Loading(dcc.Graph(id="gex-surface", figure=get_gamma_exposure_surface_data())),
     ],
 )
 
 
-# GEX chart callback
 @callback(Output("gex-chart", "figure"), Input("expiration-dropdown", "value"))
 def update_gamma_chart(expiration_date):
     if not expiration_date:
@@ -125,12 +122,6 @@ def update_gamma_chart(expiration_date):
         height=500,
     )
     return fig
-
-
-# Realized Vol chart callback (auto refresh)
-@callback(Output("vol-chart", "figure"), Input("vol-refresh", "n_intervals"))
-def update_vol_chart(_):
-    return get_realized_volatility()
 
 
 if __name__ == "__main__":

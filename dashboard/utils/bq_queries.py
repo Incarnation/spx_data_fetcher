@@ -6,9 +6,10 @@
 import logging
 from typing import List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 from google.cloud import bigquery
-from plotly.graph_objects import Figure, Scatter
+from plotly.graph_objects import Figure, Surface
 
 from common.auth import get_gcp_credentials
 from common.config import GOOGLE_CLOUD_PROJECT
@@ -75,31 +76,54 @@ def get_gamma_exposure_for_expiry(expiration_date: str) -> Tuple[pd.DataFrame, O
     return grouped, current_price
 
 
-def get_realized_volatility():
+def get_gamma_exposure_surface_data() -> Figure:
     """
-    Returns a Plotly figure for most recent 1H and 1D realized vol for all symbols.
+    Returns a 3D surface plot of Strike × Expiry × Gamma Exposure
     """
     query = f"""
-        SELECT *
-        FROM `{GOOGLE_CLOUD_PROJECT}.analytics.realized_volatility`
-        WHERE timestamp = (
-            SELECT MAX(timestamp)
-            FROM `{GOOGLE_CLOUD_PROJECT}.analytics.realized_volatility`
-        )
+        SELECT expiration_date, strike, SUM(net_gamma_exposure) AS gex
+        FROM `{TABLE_ID}`
+        WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY)
+        GROUP BY expiration_date, strike
     """
     df = CLIENT.query(query).to_dataframe()
     if df.empty:
-        return Figure(layout={"title": "No realized volatility data found."})
+        return Figure(layout={"title": "No data for 3D Gamma Exposure surface."})
 
-    fig = Figure()
-    fig.add_trace(Scatter(x=df["symbol"], y=df["vol_1h"], name="1H Vol", mode="lines+markers"))
-    fig.add_trace(Scatter(x=df["symbol"], y=df["vol_1d"], name="1D Vol", mode="lines+markers"))
+    df["expiration_date"] = pd.to_datetime(df["expiration_date"])
+    pivot = df.pivot_table(index="strike", columns="expiration_date", values="gex", fill_value=0)
+
+    z_raw = pivot.values
+    z_clipped = np.clip(z_raw, -1e8, 1e8)
+    x = pivot.index
+    y = pivot.columns.strftime("%Y-%m-%d")
+
+    fig = Figure(
+        data=[
+            Surface(
+                z=z_clipped,
+                x=x,
+                y=y,
+                colorscale="RdBu",
+                reversescale=True,
+                showscale=True,
+                opacity=0.95,
+                lighting=dict(ambient=0.6, diffuse=0.8),
+                lightposition=dict(x=0, y=0, z=300),
+            )
+        ]
+    )
 
     fig.update_layout(
-        title="Realized Volatility (Most Recent)",
-        xaxis_title="Symbol",
-        yaxis_title="Volatility (Annualized)",
+        title="3D Gamma Exposure Surface",
+        scene=dict(
+            xaxis_title="Strike Price",
+            yaxis_title="Expiration Date",
+            zaxis_title="Net Gamma Exposure",
+        ),
+        margin=dict(l=0, r=0, b=0, t=50),
+        height=600,
         template="plotly_white",
-        height=400,
     )
+
     return fig
