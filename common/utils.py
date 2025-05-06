@@ -13,9 +13,9 @@ def setup_logging():
     os.makedirs("logs", exist_ok=True)
 
     # File handler
-    file_handler = logging.FileHandler("logs/fetcher.log")
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+    # file_handler = logging.FileHandler("logs/fetcher.log")
+    # file_handler.setLevel(logging.INFO)
+    # file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
 
     # Console handler
     console_handler = logging.StreamHandler()
@@ -23,7 +23,7 @@ def setup_logging():
     console_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
 
     # Root logger
-    logging.basicConfig(level=logging.INFO, handlers=[file_handler, console_handler])
+    logging.basicConfig(level=logging.INFO, handlers=[console_handler])
 
 
 def is_trading_hours():
