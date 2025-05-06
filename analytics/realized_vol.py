@@ -3,12 +3,9 @@
 # Computes short-term realized volatility from index prices
 # =====================
 import logging
-import os
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from dotenv import load_dotenv
 from google.cloud import bigquery
 from pandas_gbq import to_gbq
 
@@ -42,11 +39,9 @@ def calculate_and_store_realized_vol():
             group = group.sort_values("timestamp")
             group["log_return"] = np.log(group["last"] / group["last"].shift(1))
 
-            # 1H realized volatility (5 min intervals → 12 samples/hour)
-            group["vol_1h"] = group["log_return"].rolling(window=12).std() * np.sqrt(12)
-
-            # 1D realized volatility (5 min intervals → ~78 per day)
-            group["vol_1d"] = group["log_return"].rolling(window=78).std() * np.sqrt(78)
+            # 10-min intervals → 6 samples/hour, 39/day
+            group["vol_1h"] = group["log_return"].rolling(window=6).std() * np.sqrt(6)
+            group["vol_1d"] = group["log_return"].rolling(window=39).std() * np.sqrt(39)
 
             clean = group.dropna(subset=["vol_1h", "vol_1d"])
             if clean.empty:
