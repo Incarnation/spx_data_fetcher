@@ -15,17 +15,6 @@ from common.config import GOOGLE_CLOUD_PROJECT
 from common.utils import is_trading_hours
 
 
-def is_us_trading_hour(ts_utc):
-    """
-    Returns True if the UTC timestamp falls between 9:30am–4:00pm Eastern Time.
-    """
-    ts_est = ts_utc.tz_convert("America/New_York")
-    return ts_est.weekday() < 5 and (
-        ts_est.time() >= pd.Timestamp("09:30").time()
-        and ts_est.time() <= pd.Timestamp("16:00").time()
-    )
-
-
 def calculate_and_store_realized_vol():
     try:
         if not is_trading_hours():
@@ -51,31 +40,33 @@ def calculate_and_store_realized_vol():
             group["timestamp"] = pd.to_datetime(group["timestamp"], utc=True)
             group = group.sort_values("timestamp")
 
-            # 👇 Filter to only U.S. trading hours (Eastern Time)
-            group = group[group["timestamp"].apply(is_us_trading_hour)]
-
             group["log_return"] = np.log(group["last"] / group["last"].shift(1))
 
-            # 1H realized volatility (5 min intervals → 12 samples/hour)
+            # 5M realized volatility
+            group["vol_5m"] = group["log_return"].rolling(window=5).std() * np.sqrt(12)
+            # 15M realized volatility
+            group["vol_15m"] = group["log_return"].rolling(window=3).std() * np.sqrt(3)
+            # 1H realized volatility
             group["vol_1h"] = group["log_return"].rolling(window=12).std() * np.sqrt(12)
 
-            # 1D realized volatility (5 min intervals → ~78 per day)
-            group["vol_1d"] = group["log_return"].rolling(window=78).std() * np.sqrt(78)
+            for window in ["5M", "15M", "1H"]:
+                col_name = f"vol_{window.lower()}"
+                clean = group.dropna(subset=[col_name])
+                if clean.empty:
+                    logging.warning(
+                        f"⚠️ Not enough data to compute {window} volatility for {symbol}"
+                    )
+                    continue
 
-            clean = group.dropna(subset=["vol_1h", "vol_1d"])
-            if clean.empty:
-                logging.warning(f"⚠️ Not enough data to compute volatility for {symbol}")
-                continue
-
-            last_row = clean.iloc[-1]
-            results.append(
-                {
-                    "timestamp": last_row["timestamp"],
-                    "symbol": symbol,
-                    "vol_1h": last_row["vol_1h"],
-                    "vol_1d": last_row["vol_1d"],
-                }
-            )
+                last_row = clean.iloc[-1]
+                results.append(
+                    {
+                        "timestamp": last_row["timestamp"],
+                        "symbol": symbol,
+                        "time_window": window,
+                        "realized_vol": last_row[col_name],
+                    }
+                )
 
         if results:
             vol_df = pd.DataFrame(results)

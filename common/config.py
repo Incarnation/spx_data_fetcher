@@ -24,6 +24,8 @@ CONTRACT_MULTIPLIER = 100
 FETCH_INTERVAL_MIN = 10
 GEX_INTERVAL_MIN = 15
 SUPPORTED_SYMBOLS = ["SPX"]
+SOURCE = "tradier"
+INDEX_PRICE_TIME_INTERVAL = "5m"
 
 # Sanity checks (optional but helpful for debugging)
 REQUIRED_VARS = {

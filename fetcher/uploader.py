@@ -9,7 +9,13 @@ import pandas as pd
 from pandas_gbq import to_gbq
 
 from common.auth import get_gcp_credentials
-from common.config import GOOGLE_CLOUD_PROJECT, INDEX_PRICE_TABLE_ID, OPTION_CHAINS_TABLE_ID
+from common.config import (
+    GOOGLE_CLOUD_PROJECT,
+    INDEX_PRICE_TABLE_ID,
+    INDEX_PRICE_TIME_INTERVAL,
+    OPTION_CHAINS_TABLE_ID,
+    SOURCE,
+)
 
 
 def upload_to_bigquery(options, timestamp, expiration, underlying_price=None):
@@ -19,9 +25,15 @@ def upload_to_bigquery(options, timestamp, expiration, underlying_price=None):
     for opt in options:
         g = opt.get("greeks") or {}
 
+        # Calculate mid_price
+        bid = opt.get("bid")
+        ask = opt.get("ask")
+        mid_price = (bid + ask) / 2 if bid is not None and ask is not None else None
+
         rows.append(
             {
                 "timestamp": timestamp,
+                "quote_time": timestamp,  # quote_time is the same as timestamp initially
                 "symbol": opt.get("symbol"),
                 "root_symbol": opt.get("root_symbol"),
                 "option_type": opt.get("option_type"),
@@ -30,6 +42,7 @@ def upload_to_bigquery(options, timestamp, expiration, underlying_price=None):
                 "strike": opt.get("strike"),
                 "bid": opt.get("bid"),
                 "ask": opt.get("ask"),
+                "mid_price": mid_price,
                 "last": opt.get("last"),
                 "change": opt.get("change"),
                 "change_percentage": opt.get("change_percentage"),
@@ -88,6 +101,8 @@ def upload_index_price(symbol: str, quote: dict):
                 "open": quote.get("open"),
                 "close": quote.get("close"),
                 "volume": quote.get("volume"),
+                "source": SOURCE,
+                "time_interval": INDEX_PRICE_TIME_INTERVAL,
             }
         ]
     )

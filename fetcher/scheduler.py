@@ -7,7 +7,9 @@
 import logging
 from datetime import datetime, timezone
 
+import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from analytics.gex_calculator import calculate_and_store_gex
 from analytics.realized_vol import calculate_and_store_realized_vol
@@ -16,7 +18,9 @@ from common.utils import is_trading_hours
 from fetcher.fetcher import fetch_option_chain, fetch_underlying_quote, get_next_expirations
 from fetcher.uploader import upload_index_price, upload_to_bigquery
 
-scheduler = BackgroundScheduler()
+# Set the timezone to Eastern Time (EST/EDT)
+NY_TZ = pytz.timezone("America/New_York")
+scheduler = BackgroundScheduler(timezone=NY_TZ)
 
 
 def debug_heartbeat():
@@ -68,14 +72,48 @@ def start_scheduler():
         scheduler.remove_all_jobs()
         logging.info("♻️ Cleaned up existing jobs.")
 
-    scheduler.add_job(debug_heartbeat, "interval", minutes=5)
-    scheduler.add_job(scheduled_upload_index_price, "interval", minutes=5)
-    scheduler.add_job(scheduled_fetch_and_upload_options_data, "interval", minutes=10)
-    scheduler.add_job(calculate_and_store_gex, "interval", minutes=15)
-    scheduler.add_job(calculate_and_store_realized_vol, "interval", minutes=5)
+    # Heartbeat every 10 minutes (24/7)
+    scheduler.add_job(
+        debug_heartbeat,
+        CronTrigger(minute="0,10,20,30,40,50", timezone=NY_TZ),
+    )
+
+    # Index price upload every 5 minutes from 9:30 AM to 4:00 PM EST
+    scheduler.add_job(
+        scheduled_upload_index_price,
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour="9-16",
+            minute="0,5,10,15,20,25,30,35,40,45,50,55",
+            timezone=NY_TZ,
+        ),
+    )
+
+    # Options data fetch every 10 minutes from 9:30 AM to 4:00 PM EST
+    scheduler.add_job(
+        scheduled_fetch_and_upload_options_data,
+        CronTrigger(day_of_week="mon-fri", hour="9-16", minute="0,10,20,30,40,50", timezone=NY_TZ),
+    )
+
+    # GEX calculation every 15 minutes from 9:30 AM to 4:00 PM EST
+    scheduler.add_job(
+        calculate_and_store_gex,
+        CronTrigger(day_of_week="mon-fri", hour="9-16", minute="0,15,30,45", timezone=NY_TZ),
+    )
+
+    # Realized volatility every 5 minutes from 9:30 AM to 4:00 PM EST
+    scheduler.add_job(
+        calculate_and_store_realized_vol,
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour="9-16",
+            minute="0,5,10,15,20,25,30,35,40,45,50,55",
+            timezone=NY_TZ,
+        ),
+    )
 
     scheduler.start()
-    logging.info("📅 Scheduler started: price every 5m, options every 10m, analytics every 15m")
+    logging.info("📅 Scheduler started for 9:30 AM to 4:00 PM EST.")
 
 
 def shutdown_scheduler():
