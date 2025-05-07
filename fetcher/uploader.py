@@ -25,7 +25,7 @@ def upload_to_bigquery(options, timestamp, expiration, underlying_price=None):
     for opt in options:
         g = opt.get("greeks") or {}
 
-        # Calculate mid_price
+        # Calculate mid_price with proper handling
         bid = opt.get("bid")
         ask = opt.get("ask")
         mid_price = (bid + ask) / 2 if bid is not None and ask is not None else None
@@ -40,8 +40,8 @@ def upload_to_bigquery(options, timestamp, expiration, underlying_price=None):
                 "expiration_date": opt.get("expiration_date"),
                 "expiration_type": opt.get("expiration_type"),
                 "strike": opt.get("strike"),
-                "bid": opt.get("bid"),
-                "ask": opt.get("ask"),
+                "bid": bid,
+                "ask": ask,
                 "mid_price": mid_price,
                 "last": opt.get("last"),
                 "change": opt.get("change"),
@@ -79,7 +79,7 @@ def upload_to_bigquery(options, timestamp, expiration, underlying_price=None):
         )
         logging.info(f"✅ Uploaded {len(df)} rows for {expiration}")
     except Exception as e:
-        logging.error(f"❌ Failed to upload data to BigQuery: {e}")
+        logging.error(f"❌ Failed to upload options data to BigQuery: {e}")
 
 
 def upload_index_price(symbol: str, quote: dict):
