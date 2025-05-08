@@ -3,14 +3,8 @@
 # Centralized configuration for environment variables
 # =====================
 
+import logging
 import os
-from pathlib import Path
-
-from dotenv import load_dotenv
-
-# Load .env for local development
-if not (os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT")):
-    load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".." / ".env")
 
 # Environment variables
 TRADIER_API_KEY = os.getenv("TRADIER_API_KEY")
@@ -37,4 +31,8 @@ REQUIRED_VARS = {
 
 missing = [key for key, value in REQUIRED_VARS.items() if not value]
 if missing and not os.getenv("RAILWAY_ENVIRONMENT"):
-    raise EnvironmentError(f"Missing required environment variables: {', '.join(missing)}")
+    raise EnvironmentError(f"❌ Missing required environment variables: {', '.join(missing)}")
+
+# Debug logging
+logging.basicConfig(level=logging.INFO)
+logging.info(f"Environment loaded successfully.")

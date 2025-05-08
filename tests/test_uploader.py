@@ -5,7 +5,8 @@ from unittest.mock import patch
 
 import pandas as pd
 import pytest
-from app import uploader
+
+from fetcher import uploader
 
 
 @patch("app.uploader.to_gbq")

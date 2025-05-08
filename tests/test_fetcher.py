@@ -3,7 +3,8 @@ from unittest.mock import patch
 
 import pytest
 import requests
-from app.fetcher import fetch_option_chain, fetch_underlying_quote, get_next_expirations
+
+from fetcher.fetcher import fetch_option_chain, fetch_underlying_quote, get_next_expirations
 
 # =====================
 # tests/test_fetcher.py

@@ -17,7 +17,7 @@ from common.config import SUPPORTED_SYMBOLS
 from common.utils import is_trading_hours
 from fetcher.fetcher import fetch_option_chain, fetch_underlying_quote, get_next_expirations
 from fetcher.uploader import upload_index_price, upload_to_bigquery
-from trade.trade_generator import generate_0dte_iron_condor
+from trade.trade_generator import generate_0dte_trade
 
 # Set the timezone to Eastern Time (EST/EDT)
 NY_TZ = pytz.timezone("America/New_York")
@@ -115,7 +115,7 @@ def start_scheduler():
 
     # Schedule 0DTE Iron Condor generation at 10AM, 11AM, 12PM, 1PM
     scheduler.add_job(
-        generate_0dte_iron_condor, "cron", day_of_week="mon-fri", hour="10,11,12,13", minute="0"
+        generate_0dte_trade, "cron", day_of_week="mon-fri", hour="10,11,12,13", minute="0"
     )
 
     scheduler.start()
