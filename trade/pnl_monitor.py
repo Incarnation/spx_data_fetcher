@@ -1,8 +1,7 @@
-# =====================
 # trade/pnl_monitor.py
 # =====================
 # PnL Monitoring, live_trade_pnl snapshots + trade‑level closure
-# =====================
+
 import logging
 from datetime import datetime, timezone
 
@@ -23,23 +22,28 @@ CLIENT = bigquery.Client(
 
 
 def update_trade_pnl():
+    """
+    1) Snapshot each open leg’s current mid & PnL into live_trade_pnl.
+    2) Update trade_legs rows with latest pnl, status (and exit_price at EOD).
+    3) Aggregate to trade_recommendations: pnl, status, exit_time, exit_price (at EOD).
+    """
     now_utc = datetime.now(timezone.utc)
+    now_iso = now_utc.isoformat()  # ← convert to string
     is_eod = now_utc.hour == 21 and now_utc.minute == 0  # 4 PM ET == 21:00 UTC
 
-    # 1️⃣ fetch all open legs
+    # 1️⃣ Fetch all open legs
     legs_df = CLIENT.query(
         f"""
-        SELECT trade_id, leg_id, strike, leg_type, direction, entry_price
-        FROM `{TRADE_LEGS_TABLE}`
-        WHERE status = 'open'
+      SELECT trade_id, leg_id, strike, leg_type, direction, entry_price
+      FROM `{TRADE_LEGS_TABLE}`
+      WHERE status = 'open'
     """
     ).to_dataframe()
     if legs_df.empty:
-        logging.info("No open legs.")
+        logging.info("No open legs to update.")
         return
 
-    # 2️⃣ pull the latest snapshot for exactly those legs
-    #    filter on root_symbol not symbol
+    # 2️⃣ Fetch latest mid-prices for those legs (use root_symbol!)
     conds = " OR ".join(
         f"(strike = {row.strike} AND option_type = '{row.leg_type}')"
         for _, row in legs_df[["strike", "leg_type"]].drop_duplicates().iterrows()
@@ -48,8 +52,7 @@ def update_trade_pnl():
       SELECT strike, option_type, mid_price
       FROM `{OPTION_SNAP_TABLE}`
       WHERE timestamp = (
-        SELECT MAX(timestamp)
-        FROM `{OPTION_SNAP_TABLE}`
+        SELECT MAX(timestamp) FROM `{OPTION_SNAP_TABLE}`
       )
       AND root_symbol = 'SPXW'
       AND ({conds})
@@ -57,14 +60,14 @@ def update_trade_pnl():
     mids_df = CLIENT.query(snap_q).to_dataframe()
     mid_map = {(r.strike, r.option_type): r.mid_price for _, r in mids_df.iterrows()}
 
-    # 3️⃣ fetch current SPX underlying
+    # 3️⃣ Fetch current SPX underlying
     spot_df = CLIENT.query(
         f"""
-        SELECT last AS underlying_price
-        FROM `{INDEX_PRICE_TABLE_ID}`
-        WHERE symbol = 'SPX'
-        ORDER BY timestamp DESC
-        LIMIT 1
+      SELECT last AS underlying_price
+      FROM `{INDEX_PRICE_TABLE_ID}`
+      WHERE symbol = 'SPX'
+      ORDER BY timestamp DESC
+      LIMIT 1
     """
     ).to_dataframe()
     underlying_price = spot_df["underlying_price"].iloc[0] if not spot_df.empty else None
@@ -73,6 +76,7 @@ def update_trade_pnl():
     leg_updates = []
     trade_totals = {}
 
+    # 4️⃣ For each open leg, compute PnL and prepare snapshots
     for _, leg in legs_df.iterrows():
         key = (leg.strike, leg.leg_type)
         current = mid_map.get(key, leg.entry_price)
@@ -86,7 +90,7 @@ def update_trade_pnl():
             {
                 "trade_id": leg.trade_id,
                 "leg_id": leg.leg_id,
-                "timestamp": now_utc,
+                "timestamp": now_iso,  # ← string, not datetime
                 "current_price": float(current),
                 "theoretical_pnl": float(pnl),
                 "mark_price": float(current),
@@ -100,12 +104,12 @@ def update_trade_pnl():
         leg_updates.append((leg.leg_id, pnl, status, exit_price))
         trade_totals[leg.trade_id] = trade_totals.get(leg.trade_id, 0.0) + pnl
 
-    # 4️⃣ insert snapshots
+    # 5️⃣ Bulk insert live snapshots
     errors = CLIENT.insert_rows_json(LIVE_TRADE_PNL_TABLE, live_rows)
     if errors:
         logging.error("❌ live_trade_pnl insert errors: %s", errors)
 
-    # 5️⃣ update each leg
+    # 6️⃣ Update each leg row
     for leg_id, pnl, status, exit_price in leg_updates:
         sets = [f"pnl = {pnl}", f"status = '{status}'"]
         if is_eod:
@@ -118,11 +122,11 @@ def update_trade_pnl():
         """
         )
 
-    # 6️⃣ update each trade
+    # 7️⃣ Update each trade record
     for tid, total in trade_totals.items():
         st = "'closed'" if is_eod else "'active'"
         exit_time_sql = "CURRENT_TIMESTAMP()" if is_eod else "exit_time"
-        exit_pr = f"entry_price + {total}" if is_eod else "exit_price"
+        exit_price_sql = f"entry_price + {total}" if is_eod else "exit_price"
 
         CLIENT.query(
             f"""
@@ -131,7 +135,7 @@ def update_trade_pnl():
             pnl        = {total},
             status     = {st},
             exit_time  = {exit_time_sql}
-            {', exit_price = ' + exit_pr if is_eod else ''}
+            {', exit_price = ' + exit_price_sql if is_eod else ''}
           WHERE trade_id = '{tid}'
         """
         )
