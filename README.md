@@ -1,10 +1,16 @@
-# 🧠 SPX + ETF Option Chain Data Fetcher & Gamma Dashboard
+# 🧠 SPX + ETF Option Chain Data Fetcher & Multi‑Strategy Trading Dashboard
 
-A production-grade Python service that fetches **SPX, SPY, QQQ, and NDX** option chain data from **Tradier** every 10 minutes **during U.S. trading hours**, uploads it to **BigQuery**, and computes:
+A robust Python service that:
 
-- 🧮 **Gamma Exposure (GEX)** by strike and expiration
-- 📊 **Realized Volatility** (1H and 1D) using 5-min index price snapshots
-- 📈 **Interactive Gamma Exposure Dashboard** built with Plotly Dash
+1. Fetches **SPX, SPY, QQQ, NDX** option chain data from **Tradier** every 10 min during U.S. trading hours.
+2. Uploads raw snapshots to **BigQuery**.
+3. Computes:
+   - 🧮 **Gamma Exposure (GEX)** by strike & expiry.
+   - 📊 **Realized Volatility** (1 H & 1 D) using 5 min index snapshots.
+   - 🔄 **Trade Recommendations** (0DTE Iron Condors & Spreads).
+   - 💰 **Live PnL Monitoring** (per‑leg snapshots + EOD closure).
+   - 📈 **P/L Analysis** (max P, max L, breakevens, PoP, Δ, Θ).
+   - 🎯 **P/L Projections & Payoff Grid** (interactive slider in dashboard).
 
 ---
 
@@ -12,151 +18,172 @@ A production-grade Python service that fetches **SPX, SPY, QQQ, and NDX** option
 
 ```
 spx_data_fetcher/
-├── app/                 # Core logic for fetching & uploading
-│   ├── fetcher.py
-│   ├── uploader.py
-│   ├── scheduler.py
-│   ├── utils.py
-├── analytics/           # Analytics logic for GEX and RVOL
+├── common/              
+│   ├── auth.py
+│   ├── config.py
+│   └── utils.py         
+│
+├── app/                 
+│   ├── fetcher.py       
+│   ├── uploader.py      
+│   └── scheduler.py     
+│
+├── analytics/           
 │   ├── gex_calculator.py
 │   └── realized_vol.py
-├── common/              # Shared utilities and auth
-│   ├── auth.py
-│   └── is_trading_hours.py
-├── dashboard/           # Gamma exposure dashboard (Dash)
-│   ├── app.py
-│   └── utils/bq_queries.py
-├── workers/             # Background scheduler runner
+│
+├── trade/               
+│   ├── trade_generator.py  
+│   ├── pl_analysis.py      
+│   └── pnl_monitor.py      
+│
+├── dashboard/           
+│   └── main.py          
+│
+├── workers/             
 │   └── main.py
-├── etc/secrets/         # GCP JSON service account file
 ├── requirements.txt
 ├── Dockerfile
 ├── .env
-└── railway.json
+└── railway.json         
 ```
 
 ---
 
-## ⚙️ Local Setup
+## ⚙️ Environment Variables
 
-1. Create a `.env` file:
-
-```env
+```
+# Tradier API
 TRADIER_API_KEY=your_tradier_api_key
-GOOGLE_CLOUD_PROJECT=your_project_id
-GOOGLE_APPLICATION_CREDENTIALS=etc/secrets/gcp-service-account.json
-GOOGLE_SERVICE_ACCOUNT_JSON={"type": "service_account", ...}
-OPTION_CHAINS_TABLE_ID=your_project.options.option_chain_snapshot
-INDEX_PRICE_TABLE_ID=your_project.market_data.index_price_snapshot
-```
 
-2. Install dependencies:
+# Google / BigQuery
+GOOGLE_CLOUD_PROJECT=your-gcp-project
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/creds.json
+GOOGLE_SERVICE_ACCOUNT_JSON='{"type":"service_account",…}'
+OPTION_CHAINS_TABLE_ID=your-project.options.option_chain_snapshot
+INDEX_PRICE_TABLE_ID=your-project.market_data.index_price_snapshot
 
-```bash
-pip install -r requirements.txt
-```
+# Trade generator defaults (optional overrides)
+CONDOR_TARGET_DELTA=0.10
+CONDOR_WING_WIDTH=10
 
-3. Run the background worker:
-
-```bash
-make run
-# or manually:
-PYTHONPATH=. python3 workers/main.py
-```
-
-4. Run the dashboard locally:
-
-```bash
-PYTHONPATH=. python3 dashboard/app.py
+# Model / code version (for audit)
+MODEL_VERSION=v1.0-ironcondor
 ```
 
 ---
 
-## 🐳 Docker (Optional)
+## 🐳 Docker
 
-```bash
+```
 docker build -t spx-dashboard .
 docker run --env-file .env -p 8050:8050 spx-dashboard
 ```
 
 ---
 
-## 🚀 Deploy on Railway
+## 🧪 Local Setup
 
-This project deploys **two services**:
-
-### 1. Background Worker
-- **Start Command**: `python workers/main.py`
-- **Type**: Background Worker
-
-### 2. Dashboard (Web App)
-- **Start Command**: `python dashboard/app.py`
-- **Type**: Web Service (port `8050`)
-
-**railway.json** is already configured with both services:
-```json
-{
-  "services": [
-    {
-      "name": "worker",
-      "startCommand": "python workers/main.py"
-    },
-    {
-      "name": "dashboard",
-      "startCommand": "python dashboard/app.py",
-      "ports": [8050]
-    }
-  ]
-}
+1. **Install dependencies**  
+```
+pip install -r requirements.txt
 ```
 
-> After deployment, click **"Generate Domain"** under the dashboard service to make it publicly accessible.
+2. **Run background worker**  
+```
+PYTHONPATH=. python3 workers/main.py
+```
+
+3. **Run dashboard**  
+```
+PYTHONPATH=. python3 dashboard/main.py
+```
+
+---
+
+## 🚀 Railway Deployment
+
+`railway.json` defines two services:
+
+1. **worker**  
+   - Start: `python workers/main.py`  
+   - Type: Background Worker  
+2. **dashboard**  
+   - Start: `python dashboard/main.py`  
+   - Ports: `8050`  
+
+After deploy, “Generate Domain” on dashboard service to expose publicly.
 
 ---
 
 ## ⏱ Scheduled Jobs
 
-| Job                            | Schedule       | Description                            |
-|-------------------------------|----------------|----------------------------------------|
-| `scheduled_fetch`             | every 10 mins  | Fetch option chains and quotes         |
-| `calculate_and_store_gex`     | every 7 mins   | Compute and store gamma exposure       |
-| `calculate_and_store_realized_vol` | every 7 mins   | Compute 1H and 1D realized vol         |
-| `debug_heartbeat`             | every 2 mins   | Scheduler liveness check               |
+```
+| Job                          | Schedule                | Description                              |
+|------------------------------|-------------------------|----------------------------------------|
+| scheduled_upload_index_price | 5 min, 9:30–16:00 ET    | Fetch & upload SPX index quotes         |
+| scheduled_fetch_and_upload_options_data | 10 min, 9:30–16:00 ET | Fetch & upload option chains + Greeks |
+| calculate_and_store_gex      | every 15 min, 9:30–16:00 ET | Compute & store gamma exposure         |
+| calculate_and_store_realized_vol | every 5 min, 9:30–16:00 ET | Compute 1H & 1D realized volatility  |
+| generate_0dte_trade          | 10:00, 11:00, 12:00, 13:00 ET | Auto-generate 0DTE Iron Condor/Spread |
+| update_trade_pnl             | every 5 min 9:00–15:55 ET + 16:00 ET | Live PnL snapshots + final EOD closure |
+| debug_heartbeat              | every 10 min (24/7)     | Scheduler liveness check                |
+```
 
 ---
 
 ## 📊 BigQuery Tables
 
-- `analytics.gamma_exposure`
-- `analytics.realized_volatility`
-- `options.option_chain_snapshot`
-- `market_data.index_price_snapshot`
+### Raw Snapshots
+```
+- options.option_chain_snapshot  
+- market_data.index_price_snapshot
+```
+
+### Analytics
+```
+- analytics.gamma_exposure  
+- analytics.realized_volatility
+```
+
+### Trading
+```
+- analytics.trade_recommendations  
+- analytics.trade_legs  
+- analytics.live_trade_pnl  
+- analytics.trade_pl_analysis  
+- analytics.trade_pl_projections
+```
 
 ---
 
 ## 📈 Dashboard Features
 
-- Interactive gamma exposure chart by strike
-- Select expiration date from dropdown
-- Red bars for negative GEX, blue for positive
-- Spot price line overlayed
+1. **Gamma Exposure Surface:**  
+   - 3D view of strike × expiry × net GEX.
 
----
+2. **Gamma Exposure Analysis:**  
+   - Bar chart by strike for chosen expiry.
 
-## 🛠 API (Optional)
+3. **Trade Recommendations:**  
+   - List of pending / active / closed auto‑generated trades.
 
-- `GET /` → Health check
-- `GET /manual-fetch` → Manual on-demand fetch
+4. **Live PnL Monitoring:**  
+   - Leg‑level PnL snapshots every 5 min + EOD close.
 
----
-
-## 🧪 Testability
-
-- Run scheduler and analytics independently
-- Run dashboard locally with live data
+5. **P/L Analysis & Projections:**  
+   - **Static Analysis:** max P, max L, breakeven(s), PoP, Δ, Θ.  
+   - **Interactive Payoff Grid:** drag slider to see how P/L changes at different underlying prices.  
+   - **Historical P/L Projections:** line chart of P/L over time.
 
 ---
 
 ## ✅ Supported Symbols
 
-- `SPX`, `SPY`, `QQQ`, `NDX` (easy to extend)
+```
+- SPX, SPY, QQQ, NDX (easily extensible to other symbols).
+```
+
+---
+
+Enjoy! 🎉
