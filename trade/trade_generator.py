@@ -95,7 +95,12 @@ def generate_0dte_trade(strategy_type: str = "iron_condor"):
 
         # Calculate entry price
         leg_prices = options_df[options_df["strike"].isin([leg["strike"] for leg in legs])]
-        entry_price = sum(leg_prices["mid_price"])
+        entry_price = sum(
+            leg_prices.apply(
+                lambda row: row["mid_price"] if row["direction"] == "long" else -row["mid_price"],
+                axis=1,
+            )
+        )
 
         # Create trade ID
         trade_id = f"{strategy_type.upper()}_{datetime.now().strftime('%Y%m%d%H%M%S')}"

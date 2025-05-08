@@ -30,7 +30,7 @@ if __name__ == "__main__":
         missing.append("GOOGLE_CLOUD_PROJECT")
     if not OPTION_CHAINS_TABLE_ID:
         missing.append("OPTION_CHAINS_TABLE_ID")
-    if not GOOGLE_SERVICE_ACCOUNT_JSON:
+    if not GOOGLE_SERVICE_ACCOUNT_JSON and os.getenv("RAILWAY_ENVIRONMENT"):
         missing.append("GOOGLE_SERVICE_ACCOUNT_JSON")
 
     if missing:

@@ -1,6 +1,6 @@
 # =====================
 # trade/pnl_monitor.py
-# PnL Monitoring and Aggregation for Multi-Leg Strategies
+# PnL Monitoring and Aggregation for Multi-Leg Strategies with EOD Handling
 # =====================
 
 import logging
@@ -23,10 +23,15 @@ CLIENT = bigquery.Client(credentials=CREDENTIALS, project=GOOGLE_CLOUD_PROJECT)
 def update_trade_pnl():
     """
     Update PnL for each leg and aggregate at the trade level.
+    Handles EOD closure and final PnL calculation at 4 PM ET.
     """
     logging.info("Updating PnL for open trades...")
 
     try:
+        # Determine if it's EOD (4 PM ET)
+        current_utc = datetime.now(timezone.utc)
+        is_eod = current_utc.hour == 21 and current_utc.minute == 0
+
         # Fetch all open trade legs
         query = f"""
             SELECT trade_id, leg_id, strike, direction, entry_price, status
@@ -59,6 +64,7 @@ def update_trade_pnl():
             entry_price = leg["entry_price"]
             trade_id = leg["trade_id"]
 
+            # Fetch the current or last known price for the strike
             current_price = strike_price_map.get(strike, entry_price)
 
             # Calculate PnL per leg
@@ -68,12 +74,15 @@ def update_trade_pnl():
                 else (current_price - entry_price)
             )
 
+            # Determine leg status
+            leg_status = "closed" if is_eod else "open"
+
             # Update leg record
             leg_updates.append(
                 {
                     "leg_id": leg_id,
                     "pnl": pnl,
-                    "status": "closed" if datetime.now(timezone.utc).hour >= 16 else "open",
+                    "status": leg_status,
                 }
             )
 
@@ -92,17 +101,20 @@ def update_trade_pnl():
 
         # Update trade PnL in `trade_recommendations`
         for trade_id, total_pnl in trade_pnl_map.items():
+            exit_time_clause = "CURRENT_TIMESTAMP()" if is_eod else "NULL"
+            trade_status = "closed" if is_eod else "active"
+
             CLIENT.query(
                 f"""
                 UPDATE `{TRADE_RECOMMENDATIONS_TABLE}`
                 SET pnl = {total_pnl},
-                    status = 'closed' if {datetime.now(timezone.utc).hour >= 16} ELSE 'active',
-                    exit_time = CURRENT_TIMESTAMP()
+                    status = '{trade_status}',
+                    exit_time = {exit_time_clause}
                 WHERE trade_id = '{trade_id}'
             """
             )
 
-        logging.info("PnL update complete.")
+        logging.info("PnL update complete. EOD status: %s", is_eod)
 
     except Exception as e:
         logging.error(f"Error updating PnL: {e}")

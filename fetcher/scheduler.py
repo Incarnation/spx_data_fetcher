@@ -17,6 +17,7 @@ from common.config import SUPPORTED_SYMBOLS
 from common.utils import is_trading_hours
 from fetcher.fetcher import fetch_option_chain, fetch_underlying_quote, get_next_expirations
 from fetcher.uploader import upload_index_price, upload_to_bigquery
+from trade.pnl_monitor import update_trade_pnl
 from trade.trade_generator import generate_0dte_trade
 
 # Set the timezone to Eastern Time (EST/EDT)
@@ -117,6 +118,12 @@ def start_scheduler():
     scheduler.add_job(
         generate_0dte_trade, "cron", day_of_week="mon-fri", hour="10,11,12,13", minute="0"
     )
+
+    # PnL Monitoring every 5 minutes until 3:55 PM ET
+    scheduler.add_job(update_trade_pnl, "cron", day_of_week="mon-fri", hour="9-15", minute="*/5")
+
+    # Final PnL update at 4 PM ET
+    scheduler.add_job(update_trade_pnl, "cron", day_of_week="mon-fri", hour="16", minute="0")
 
     scheduler.start()
     logging.info("📅 Scheduler started for 9:30 AM to 4:00 PM EST.")
