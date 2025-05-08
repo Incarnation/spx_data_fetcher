@@ -27,53 +27,69 @@ def generate_0dte_trade(strategy_type: str = "iron_condor"):
     """
     Generate a 0DTE trade for the given strategy type.
 
-    - Pulls the latest SPX spot price.
-    - Loads today's 0DTE option chain (mid_price + delta).
-    - Chooses strikes for an Iron Condor (10% delta, 10‑point wing).
-    - Records one row in trade_recommendations, + one per‑leg in trade_legs.
+    Steps:
+      1) Fetch the latest SPX spot price.
+      2) Determine today's expiration date.
+      3) Load *only* the most recent mid_price+delta per strike from the
+         snapshot table (UTC timestamps) using QUALIFY/ROW_NUMBER.
+      4) Pick strikes for Iron Condor (10% delta, 10‑point wings) or
+         an example vertical spread.
+      5) Compute entry_price as net of leg mid‑prices.
+      6) Insert into trade_recommendations and trade_legs.
     """
     logging.info(f"🔎 Generating 0DTE {strategy_type}...")
 
     try:
-        # 1) Grab current SPX spot
+        # 1) Grab current SPX spot price
         price_q = f"""
             SELECT last
             FROM `{INDEX_PRICE_TABLE}`
-            WHERE symbol='SPX'
+            WHERE symbol = 'SPX'
             ORDER BY timestamp DESC
             LIMIT 1
         """
-        df_price = CLIENT.query(price_q).to_dataframe()
-        if df_price.empty:
+        price_df = CLIENT.query(price_q).to_dataframe()
+        if price_df.empty:
             logging.warning("No SPX spot price available.")
             return
-        spot_price = df_price["last"].iloc[0]
+        spot_price = price_df["last"].iloc[0]
 
-        # 2) Today's expiration
-        expiration_date = datetime.now(timezone.utc).date()
+        # 2) Today's expiration date (0DTE)
+        now_ts = datetime.now(timezone.utc)
+        expiration_date = now_ts.date()
 
-        # 3) Load the SNAPSHOT table for today’s strikes
+        # 3) Load only the *latest* snapshot per strike/option_type
         option_q = f"""
-            SELECT strike, option_type, mid_price, delta
+            SELECT
+              strike,
+              option_type,
+              mid_price,
+              delta
             FROM `{OPTION_SNAPSHOT_TABLE}`
-            WHERE symbol='SPX'
-              AND expiration_date='{expiration_date}'
+            WHERE symbol = 'SPX'
+              AND expiration_date = '{expiration_date}'
+            QUALIFY
+              ROW_NUMBER() OVER (
+                PARTITION BY strike, option_type
+                ORDER BY timestamp DESC
+              ) = 1
         """
         options_df = CLIENT.query(option_q).to_dataframe()
         if options_df.empty:
-            logging.warning("No 0DTE option data available.")
+            logging.warning("No 0DTE option data available for %s.", expiration_date)
             return
 
-        # 4) Strategy logic
+        # 4) Strategy logic: build legs list
         legs = []
         if strategy_type == "iron_condor":
-            short_delta = 0.10  # targeting ~10% delta
+            short_delta = 0.10  # 10% delta
             wing_width = 10  # 10‑point wings
 
-            # find closest short puts / calls by abs(delta)
+            # separate calls vs puts
             puts = options_df[options_df.option_type == "put"]
             calls = options_df[options_df.option_type == "call"]
 
+            # pick the nearest‐to‐delta strikes
             short_put_strike = puts[puts.delta.abs() <= short_delta].strike.min()
             short_call_strike = calls[calls.delta.abs() <= short_delta].strike.max()
 
@@ -88,7 +104,7 @@ def generate_0dte_trade(strategy_type: str = "iron_condor"):
             ]
 
         elif strategy_type == "vertical_spread":
-            # Example vertical spread: short 10%‑delta put + long wing_width below
+            # Example: short 10% delta put + long wing_width below
             delta_target = 0.10
             wing_width = 10
 
@@ -102,21 +118,20 @@ def generate_0dte_trade(strategy_type: str = "iron_condor"):
             ]
 
         else:
-            logging.error(f"Unknown strategy type: {strategy_type}")
+            logging.error("Unknown strategy type: %s", strategy_type)
             return
 
-        # 5) Build a map for per‑leg mid_price lookup
+        # 5) Build a lookup for mid_price by (strike, option_type)
         options_df.set_index(["strike", "option_type"], inplace=True)
         mid_map = options_df["mid_price"].to_dict()
 
-        # 6) Compute trade entry price = sum(long mid_price) − sum(short mid_price)
+        # 6) Compute entry_price = sum(long mid) − sum(short mid)
         entry_price = sum(
             mid_map[(leg["strike"], leg["type"])] * (1 if leg["direction"] == "long" else -1)
             for leg in legs
         )
 
-        # 7) Generate a unique trade_id
-        now_ts = datetime.now(timezone.utc)
+        # 7) Create a unique trade_id
         trade_id = f"{strategy_type.upper()}_{now_ts.strftime('%Y%m%d%H%M%S')}"
 
         # 8) Insert into trade_recommendations
@@ -157,7 +172,7 @@ def generate_0dte_trade(strategy_type: str = "iron_condor"):
             )
 
         CLIENT.insert_rows_json(TRADE_LEGS_TABLE, leg_rows)
-        logging.info(f"✅ Generated trade {trade_id} with legs: {legs}")
+        logging.info("✅ Generated trade %s with legs %s", trade_id, legs)
 
-    except Exception as e:
-        logging.exception(f"❌ Error in generate_0dte_trade: {e}")
+    except Exception:
+        logging.exception("❌ Error in generate_0dte_trade")
