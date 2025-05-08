@@ -120,20 +120,26 @@ def get_legs_data(trade_id: str):
 
 def get_live_pnl_data(trade_id: Optional[str] = None) -> pd.DataFrame:
     """
-    If trade_id is None → return empty.
-    Otherwise return **only** the latest snapshot per leg for that trade.
+    If trade_id is None → return empty DataFrame.
+    Otherwise return only the latest snapshot per leg for that trade.
     """
     if not trade_id:
         return pd.DataFrame()
 
     sql = f"""
     WITH latest AS (
-      SELECT trade_id, leg_id, MAX(timestamp) AS ts
+      SELECT
+        trade_id,
+        leg_id,
+        MAX(timestamp) AS ts
       FROM `{LIVE_TRADE_PNL_TABLE}`
       WHERE trade_id = @tid
       GROUP BY trade_id, leg_id
     )
-    SELECT p.leg_id, p.current_price, p.theoretical_pnl
+    SELECT
+      p.leg_id,
+      p.current_price,
+      p.theoretical_pnl
     FROM `{LIVE_TRADE_PNL_TABLE}` AS p
     JOIN latest AS l
       ON p.trade_id = l.trade_id
@@ -142,6 +148,7 @@ def get_live_pnl_data(trade_id: Optional[str] = None) -> pd.DataFrame:
     WHERE p.trade_id = @tid
     """
     job_conf = QueryJobConfig(query_parameters=[ScalarQueryParameter("tid", "STRING", trade_id)])
+
     try:
         return CLIENT.query(sql, job_config=job_conf).to_dataframe()
     except Exception as e:

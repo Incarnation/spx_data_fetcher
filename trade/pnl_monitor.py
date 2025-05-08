@@ -24,46 +24,47 @@ CLIENT = bigquery.Client(
 
 def update_trade_pnl():
     now_utc = datetime.now(timezone.utc)
-    is_eod = now_utc.hour == 21 and now_utc.minute == 0  # 4 PM ET
+    is_eod = now_utc.hour == 21 and now_utc.minute == 0  # 4 PM ET == 21:00 UTC
 
-    # 1) fetch open legs
+    # 1️⃣ fetch all open legs
     legs_df = CLIENT.query(
         f"""
-      SELECT trade_id, leg_id, strike, leg_type, direction, entry_price
-      FROM `{TRADE_LEGS_TABLE}`
-      WHERE status = 'open'
+        SELECT trade_id, leg_id, strike, leg_type, direction, entry_price
+        FROM `{TRADE_LEGS_TABLE}`
+        WHERE status = 'open'
     """
     ).to_dataframe()
     if legs_df.empty:
         logging.info("No open legs.")
         return
 
-    # 2) pull the latest snapshot for exactly those legs
-    # build a filter for only the strikes & types we need
+    # 2️⃣ pull the latest snapshot for exactly those legs
+    #    filter on root_symbol not symbol
     conds = " OR ".join(
-        f"(strike={row.strike} AND option_type='{row.leg_type}')"
+        f"(strike = {row.strike} AND option_type = '{row.leg_type}')"
         for _, row in legs_df[["strike", "leg_type"]].drop_duplicates().iterrows()
     )
     snap_q = f"""
       SELECT strike, option_type, mid_price
       FROM `{OPTION_SNAP_TABLE}`
       WHERE timestamp = (
-        SELECT MAX(timestamp) FROM `{OPTION_SNAP_TABLE}`
+        SELECT MAX(timestamp)
+        FROM `{OPTION_SNAP_TABLE}`
       )
+      AND root_symbol = 'SPXW'
       AND ({conds})
     """
     mids_df = CLIENT.query(snap_q).to_dataframe()
-    # now build a dict keyed by (strike, option_type)
     mid_map = {(r.strike, r.option_type): r.mid_price for _, r in mids_df.iterrows()}
 
-    # 3) fetch current SPX spot
+    # 3️⃣ fetch current SPX underlying
     spot_df = CLIENT.query(
         f"""
-      SELECT last AS underlying_price
-      FROM `{INDEX_PRICE_TABLE_ID}`
-      WHERE symbol='SPX'
-      ORDER BY timestamp DESC
-      LIMIT 1
+        SELECT last AS underlying_price
+        FROM `{INDEX_PRICE_TABLE_ID}`
+        WHERE symbol = 'SPX'
+        ORDER BY timestamp DESC
+        LIMIT 1
     """
     ).to_dataframe()
     underlying_price = spot_df["underlying_price"].iloc[0] if not spot_df.empty else None
@@ -86,9 +87,9 @@ def update_trade_pnl():
                 "trade_id": leg.trade_id,
                 "leg_id": leg.leg_id,
                 "timestamp": now_utc,
-                "current_price": current,
-                "theoretical_pnl": pnl,
-                "mark_price": current,
+                "current_price": float(current),
+                "theoretical_pnl": float(pnl),
+                "mark_price": float(current),
                 "underlying_price": underlying_price,
                 "price_type": "mid",
                 "underlying_symbol": "SPX",
@@ -97,12 +98,14 @@ def update_trade_pnl():
         )
 
         leg_updates.append((leg.leg_id, pnl, status, exit_price))
-        trade_totals[leg.trade_id] = trade_totals.get(leg.trade_id, 0) + pnl
+        trade_totals[leg.trade_id] = trade_totals.get(leg.trade_id, 0.0) + pnl
 
-    # 4) insert snapshots
-    CLIENT.insert_rows_json(LIVE_TRADE_PNL_TABLE, live_rows)
+    # 4️⃣ insert snapshots
+    errors = CLIENT.insert_rows_json(LIVE_TRADE_PNL_TABLE, live_rows)
+    if errors:
+        logging.error("❌ live_trade_pnl insert errors: %s", errors)
 
-    # 5) update each leg
+    # 5️⃣ update each leg
     for leg_id, pnl, status, exit_price in leg_updates:
         sets = [f"pnl = {pnl}", f"status = '{status}'"]
         if is_eod:
@@ -115,10 +118,10 @@ def update_trade_pnl():
         """
         )
 
-    # 6) update each trade
+    # 6️⃣ update each trade
     for tid, total in trade_totals.items():
         st = "'closed'" if is_eod else "'active'"
-        exit_time = "CURRENT_TIMESTAMP()" if is_eod else "exit_time"
+        exit_time_sql = "CURRENT_TIMESTAMP()" if is_eod else "exit_time"
         exit_pr = f"entry_price + {total}" if is_eod else "exit_price"
 
         CLIENT.query(
@@ -127,8 +130,10 @@ def update_trade_pnl():
           SET
             pnl        = {total},
             status     = {st},
-            exit_time  = {exit_time}
-            {', exit_price = '+exit_pr if is_eod else ''}
+            exit_time  = {exit_time_sql}
+            {', exit_price = ' + exit_pr if is_eod else ''}
           WHERE trade_id = '{tid}'
         """
         )
+
+    logging.info("✅ PnL monitor complete (EOD=%s)", is_eod)
