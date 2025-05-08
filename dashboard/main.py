@@ -16,18 +16,17 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 if not (os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT")):
     load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env")
 
-import pandas as pd
-from dash import Dash, Input, Output, callback, dcc, html
+from dash import MATCH, Dash, Input, Output, callback, callback_context, dcc, html
 from flask_caching import Cache
-from plotly.graph_objects import Bar, Figure, Surface
+from plotly.graph_objects import Bar, Figure
 from utils.bq_queries import (
     get_available_expirations,
     get_gamma_exposure_for_expiry,
     get_gamma_exposure_surface_data,
+    get_legs_data,
     get_live_pnl_data,
     get_trade_ids,
     get_trade_pl_analysis,
-    get_trade_pl_projections,
     get_trade_recommendations,
 )
 
@@ -61,8 +60,6 @@ app.layout = html.Div(
                 dcc.Tab(label="Gamma Exposure Surface", value="tab-gamma-surface"),
                 dcc.Tab(label="Gamma Exposure Analysis", value="tab-gamma"),
                 dcc.Tab(label="Trade Recommendations", value="tab-trades"),
-                dcc.Tab(label="Live PnL Monitoring", value="tab-pnl"),
-                dcc.Tab(label="P/L Analysis & Projections", value="tab-pl-analysis"),
             ],
         ),
         html.Div(id="tabs-content"),
@@ -81,10 +78,6 @@ def render_content(tab):
         return render_gamma_exposure_tab()
     elif tab == "tab-trades":
         return render_trade_recommendations_tab()
-    elif tab == "tab-pnl":
-        return render_live_pnl_tab()
-    elif tab == "tab-pl-analysis":
-        return render_pl_analysis_tab()
 
     return html.Div("Invalid tab selected")
 
@@ -125,12 +118,12 @@ def render_gamma_exposure_tab():
 
 
 # =====================
-# Tab 3: Trade Recommendations
+# Tab: Trade Recommendations (Enhanced)
 # =====================
 def render_trade_recommendations_tab():
     return html.Div(
         children=[
-            html.H3("Trade Recommendations"),
+            html.H3("Trade Recommendations", style={"textAlign": "center", "marginBottom": "20px"}),
             dcc.Dropdown(
                 id="trade-recommendation-status",
                 options=[
@@ -139,6 +132,7 @@ def render_trade_recommendations_tab():
                     {"label": "Closed", "value": "closed"},
                 ],
                 placeholder="Select Trade Status",
+                style={"width": "300px", "margin": "auto", "marginBottom": "20px"},
             ),
             html.Div(id="trade-recommendation-table"),
         ]
@@ -146,110 +140,116 @@ def render_trade_recommendations_tab():
 
 
 @callback(
-    Output("trade-recommendation-table", "children"), Input("trade-recommendation-status", "value")
+    Output("trade-recommendation-table", "children"),
+    Input("trade-recommendation-status", "value"),
 )
 def update_trade_recommendation_table(status):
     trades_df = get_trade_recommendations(status)
     if trades_df.empty:
-        return html.Div("No trade recommendations found.")
+        return html.Div(
+            "No trade recommendations found.",
+            style={"textAlign": "center", "margin": "20px"},
+        )
 
-    return html.Table(
-        children=[html.Tr([html.Th(col) for col in trades_df.columns])]
-        + [
-            html.Tr([html.Td(trades_df.iloc[i][col]) for col in trades_df.columns])
-            for i in range(len(trades_df))
-        ],
-        style={"width": "100%", "border": "1px solid black", "borderCollapse": "collapse"},
-    )
+    rows = []
+    for _, row in trades_df.iterrows():
+        trade_id = row["trade_id"]
 
+        main_row = html.Div(
+            [
+                html.Div(
+                    [
+                        html.Div(f"Trade ID: {trade_id}", className="trade-id"),
+                        html.Div(f"Strategy: {row['strategy_type']}"),
+                        html.Div(f"Status: {row['status']}"),
+                        html.Div(f"Entry Price: ${row['entry_price']:.2f}"),
+                        html.Div(f"PnL: ${row['pnl']:.2f}"),
+                        html.Button(
+                            "Expand",
+                            id={"type": "expand-button", "index": trade_id},
+                            n_clicks=0,
+                            className="expand-button",
+                        ),
+                    ],
+                    className="main-row",
+                ),
+                html.Div(
+                    id={"type": "collapse-content", "index": trade_id},
+                    className="collapse-content",
+                    style={"display": "none"},
+                ),
+            ],
+            className="trade-row",
+        )
+        rows.append(main_row)
 
-# =====================
-# Tab 4: Live PnL Monitoring
-# =====================
-def render_live_pnl_tab():
-    return html.Div(
-        children=[
-            html.H3("Live PnL Monitoring"),
-            dcc.Interval(id="pnl-update-interval", interval=300000, n_intervals=0),
-            html.Div(id="pnl-table"),
-        ]
-    )
-
-
-@callback(Output("pnl-table", "children"), Input("pnl-update-interval", "n_intervals"))
-def update_live_pnl_table(n_intervals):
-    pnl_data = get_live_pnl_data()
-    if pnl_data.empty:
-        return html.Div("No open trades found.")
-
-    return html.Table(
-        children=[html.Tr([html.Th(col) for col in pnl_data.columns])]
-        + [
-            html.Tr([html.Td(pnl_data.iloc[i][col]) for col in pnl_data.columns])
-            for i in range(len(pnl_data))
-        ],
-        style={"width": "100%", "border": "1px solid black"},
-    )
-
-
-# =====================
-# Tab 5: P/L Analysis & Projections
-# =====================
-def render_pl_analysis_tab():
-    return html.Div(
-        children=[
-            html.H3("P/L Analysis & Projections"),
-            dcc.Dropdown(
-                id="pl-trade-id-dropdown",
-                options=[
-                    {"label": trade_id, "value": trade_id} for trade_id in get_cached_trade_ids()
-                ],
-                placeholder="Select Trade ID",
-                style={"width": "300px"},
-            ),
-            html.Div(id="pl-analysis-content"),
-            dcc.Graph(id="pl-projection-chart"),
-        ]
-    )
+    return html.Div(rows, className="trade-table")
 
 
-@callback(Output("pl-analysis-content", "children"), Input("pl-trade-id-dropdown", "value"))
-def update_pl_analysis(trade_id):
-    if not trade_id:
-        return html.Div("Select a trade to view P/L analysis.")
+@callback(
+    Output({"type": "collapse-content", "index": MATCH}, "style"),
+    Output({"type": "collapse-content", "index": MATCH}, "children"),
+    Input({"type": "expand-button", "index": MATCH}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def toggle_trade_details(n_clicks):
+    # which trade?
+    tid = callback_context.triggered_id["index"]
 
-    analysis_data = get_trade_pl_analysis(trade_id)
-    if analysis_data.empty:
-        return html.Div("No P/L analysis data found.")
+    # 1) P/L Analysis
+    pl = get_trade_pl_analysis(tid).iloc[0]
 
-    data = analysis_data.iloc[0]
-    return html.Div(
-        children=[
-            html.P(f"Max Profit: {data['max_profit']}"),
-            html.P(f"Max Loss: {data['max_loss']}"),
-            html.P(f"Breakeven Range: {data['breakeven_lower']} - {data['breakeven_upper']}"),
-            html.P(f"Probability of Profit: {data['probability_profit']}%"),
-            html.P(f"Delta: {data['delta']}"),
-            html.P(f"Theta: {data['theta']}"),
-        ]
-    )
+    # 2) Live PnL
+    live = get_live_pnl_data(tid)
+    total_live = live["theoretical_pnl"].sum() if not live.empty else 0.0
 
+    # 3) Legs
+    legs = get_legs_data(tid)
 
-@callback(Output("pl-projection-chart", "figure"), Input("pl-trade-id-dropdown", "value"))
-def update_pl_projection_chart(trade_id):
-    if not trade_id:
-        return {}
+    details = [
+        html.H5("P/L Analysis"),
+        html.P(f"Max Profit:   ${pl.max_profit:.2f}"),
+        html.P(f"Max Loss:     ${pl.max_loss:.2f}"),
+        html.P(f"Breakeven:    ${pl.breakeven_lower:.2f} – ${pl.breakeven_upper:.2f}"),
+        html.P(f"Prob. Profit: {pl.probability_profit:.1f}%"),
+        html.P(f"Δ:            {pl.delta:.3f}"),
+        html.P(f"Θ:            {pl.theta:.3f}"),
+        html.H5("Live PnL"),
+        html.P(f"Total Live PnL: ${total_live:.2f}", style={"fontWeight": "bold"}),
+        html.Table(
+            [html.Tr([html.Th(c) for c in ["Leg ID", "Curr Price", "PnL"]])]
+            + [
+                html.Tr(
+                    [
+                        html.Td(r.leg_id),
+                        html.Td(f"${r.current_price:.2f}"),
+                        html.Td(f"${r.theoretical_pnl:.2f}"),
+                    ]
+                )
+                for _, r in live.iterrows()
+            ],
+            className="live-pnl-table",
+        ),
+        html.H5("Legs"),
+        html.Table(
+            [html.Tr([html.Th(c) for c in ["Leg ID", "Strike", "Dir", "Entry Price"]])]
+            + [
+                html.Tr(
+                    [
+                        html.Td(r.leg_id),
+                        html.Td(f"{r.strike:.1f}"),
+                        html.Td(r.direction),
+                        html.Td(f"${r.entry_price:.2f}"),
+                    ]
+                )
+                for _, r in legs.iterrows()
+            ],
+            className="legs-table",
+        ),
+    ]
 
-    projections = get_trade_pl_projections(trade_id)
-    if projections.empty:
-        return {}
-
-    return {
-        "data": [
-            {"x": projections["timestamp"], "y": projections["pnl"], "type": "line", "name": "P/L"}
-        ],
-        "layout": {"title": f"P/L Projections for Trade {trade_id}"},
-    }
+    show = {"display": "block"} if (n_clicks or 0) % 2 == 1 else {"display": "none"}
+    return show, details
 
 
 @callback(Output("gamma-exposure-chart", "figure"), Input("gamma-expiry-dropdown", "value"))

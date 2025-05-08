@@ -9,6 +9,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 from google.cloud import bigquery
+from google.cloud.bigquery import QueryJobConfig, ScalarQueryParameter
 from plotly.graph_objects import Figure, Surface
 
 from common.auth import get_gcp_credentials
@@ -19,6 +20,7 @@ TRADE_RECOMMENDATIONS_TABLE = f"{GOOGLE_CLOUD_PROJECT}.analytics.trade_recommend
 LIVE_TRADE_PNL_TABLE = f"{GOOGLE_CLOUD_PROJECT}.analytics.live_trade_pnl"
 TRADE_PL_ANALYSIS_TABLE = f"{GOOGLE_CLOUD_PROJECT}.analytics.trade_pl_analysis"
 TRADE_PL_PROJECTIONS_TABLE = f"{GOOGLE_CLOUD_PROJECT}.analytics.trade_pl_projections"
+TRADE_LEGS_TABLE = f"{GOOGLE_CLOUD_PROJECT}.analytics.trade_legs"
 
 # Create BigQuery client using proper credentials
 CREDENTIALS = get_gcp_credentials()
@@ -74,22 +76,76 @@ def get_trade_recommendations(status: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def get_live_pnl_data() -> pd.DataFrame:
+def get_legs_data(trade_id: str):
     """
-    Fetch live PnL data for active trades.
+    Fetch all legs associated with a trade_id from the trade_legs table.
+
+    Args:
+        trade_id (str): The unique identifier of the trade.
+
+    Returns:
+        pd.DataFrame: Dataframe containing leg_id, strike, direction, leg_type, entry_price, and status.
     """
     query = f"""
-        SELECT trade_id, leg_id, timestamp, current_price, theoretical_pnl, 
-               mark_price, underlying_price, price_type, status
-        FROM `{LIVE_TRADE_PNL_TABLE}`
-        WHERE status = 'active'
-        ORDER BY timestamp DESC
+        SELECT 
+            leg_id,
+            strike,
+            direction,
+            leg_type,
+            entry_price,
+            status
+        FROM `{TRADE_LEGS_TABLE}`
+        WHERE trade_id = @trade_id
+        ORDER BY strike ASC
     """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("trade_id", "STRING", trade_id)]
+    )
 
     try:
-        return CLIENT.query(query).to_dataframe()
+        legs_df = CLIENT.query(query, job_config=job_config).to_dataframe()
+        if legs_df.empty:
+            return pd.DataFrame(
+                columns=["leg_id", "strike", "direction", "leg_type", "entry_price", "status"]
+            )
+
+        return legs_df
+
     except Exception as e:
-        logging.error(f"Error fetching live PnL data: {e}")
+        print(f"Error fetching legs for trade_id {trade_id}: {e}")
+        return pd.DataFrame(
+            columns=["leg_id", "strike", "direction", "leg_type", "entry_price", "status"]
+        )
+
+
+def get_live_pnl_data(trade_id: Optional[str] = None) -> pd.DataFrame:
+    """
+    If trade_id is None → return empty.
+    Otherwise return **only** the latest snapshot per leg for that trade.
+    """
+    if not trade_id:
+        return pd.DataFrame()
+
+    sql = f"""
+    WITH latest AS (
+      SELECT trade_id, leg_id, MAX(timestamp) AS ts
+      FROM `{LIVE_TRADE_PNL_TABLE}`
+      WHERE trade_id = @tid
+      GROUP BY trade_id, leg_id
+    )
+    SELECT p.leg_id, p.current_price, p.theoretical_pnl
+    FROM `{LIVE_TRADE_PNL_TABLE}` AS p
+    JOIN latest AS l
+      ON p.trade_id = l.trade_id
+     AND p.leg_id   = l.leg_id
+     AND p.timestamp= l.ts
+    WHERE p.trade_id = @tid
+    """
+    job_conf = QueryJobConfig(query_parameters=[ScalarQueryParameter("tid", "STRING", trade_id)])
+    try:
+        return CLIENT.query(sql, job_config=job_conf).to_dataframe()
+    except Exception as e:
+        logging.error(f"get_live_pnl_data({trade_id}) failed: {e}")
         return pd.DataFrame()
 
 
