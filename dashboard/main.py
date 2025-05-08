@@ -25,6 +25,7 @@ from utils.bq_queries import (
     get_gamma_exposure_for_expiry,
     get_gamma_exposure_surface_data,
     get_live_pnl_data,
+    get_trade_ids,
     get_trade_pl_analysis,
     get_trade_pl_projections,
     get_trade_recommendations,
@@ -39,6 +40,11 @@ cache = Cache(app.server, config={"CACHE_TYPE": "SimpleCache"})
 @cache.memoize(timeout=300)
 def get_cached_expirations():
     return get_available_expirations()[::-1]
+
+
+@cache.memoize(timeout=300)
+def get_cached_trade_ids():
+    return get_trade_ids()
 
 
 # =====================
@@ -97,8 +103,7 @@ def render_gamma_surface_tab():
 
 @callback(Output("gamma-surface-chart", "figure"), Input("refresh-gamma-surface", "n_clicks"))
 def update_gamma_surface_chart(n_clicks):
-    fig = get_gamma_exposure_surface_data()
-    return fig
+    return get_gamma_exposure_surface_data()
 
 
 # =====================
@@ -145,8 +150,16 @@ def render_trade_recommendations_tab():
 def update_trade_recommendation_table(status):
     trades_df = get_trade_recommendations(status)
     if trades_df.empty:
-        return "No trade recommendations found."
-    return trades_df.to_dict("records")
+        return html.Div("No trade recommendations found.")
+
+    return html.Table(
+        children=[html.Tr([html.Th(col) for col in trades_df.columns])]
+        + [
+            html.Tr([html.Td(trades_df.iloc[i][col]) for col in trades_df.columns])
+            for i in range(len(trades_df))
+        ],
+        style={"width": "100%", "border": "1px solid black", "borderCollapse": "collapse"},
+    )
 
 
 # =====================
@@ -166,8 +179,16 @@ def render_live_pnl_tab():
 def update_live_pnl_table(n_intervals):
     pnl_df = get_live_pnl_data()
     if pnl_df.empty:
-        return "No open trades found."
-    return pnl_df.to_dict("records")
+        return html.Div("No open trades found.")
+
+    # Render as a simple HTML table
+    return html.Table(
+        children=[html.Tr([html.Th(col) for col in pnl_df.columns])]
+        + [
+            html.Tr([html.Td(pnl_df.iloc[i][col]) for col in pnl_df.columns])
+            for i in range(len(pnl_df))
+        ]
+    )
 
 
 # =====================
@@ -177,7 +198,14 @@ def render_pl_analysis_tab():
     return html.Div(
         children=[
             html.H3("P/L Analysis & Projections"),
-            dcc.Dropdown(id="pl-trade-id-dropdown", placeholder="Select Trade ID"),
+            dcc.Dropdown(
+                id="pl-trade-id-dropdown",
+                options=[
+                    {"label": trade_id, "value": trade_id} for trade_id in get_cached_trade_ids()
+                ],
+                placeholder="Select Trade ID",
+                style={"width": "300px"},
+            ),
             html.Div(id="pl-analysis-content"),
             dcc.Graph(id="pl-projection-chart"),
         ]
@@ -186,15 +214,20 @@ def render_pl_analysis_tab():
 
 @callback(Output("pl-analysis-content", "children"), Input("pl-trade-id-dropdown", "value"))
 def update_pl_analysis(trade_id):
+    if not trade_id:
+        return html.Div("Select a trade to view P/L analysis.")
+
     analysis_data = get_trade_pl_analysis(trade_id)
     if analysis_data.empty:
-        return "No P/L analysis data found."
+        return html.Div("No P/L analysis data found.")
+
     data = analysis_data.iloc[0]
     return html.Div(
-        [
+        children=[
             html.P(f"Max Profit: {data['max_profit']}"),
             html.P(f"Max Loss: {data['max_loss']}"),
-            html.P(f"Breakeven: {data['breakeven_lower']} - {data['breakeven_upper']}"),
+            html.P(f"Breakeven Range: {data['breakeven_lower']} - {data['breakeven_upper']}"),
+            html.P(f"Probability of Profit: {data['probability_profit']}%"),
             html.P(f"Delta: {data['delta']}"),
             html.P(f"Theta: {data['theta']}"),
         ]
@@ -203,11 +236,17 @@ def update_pl_analysis(trade_id):
 
 @callback(Output("pl-projection-chart", "figure"), Input("pl-trade-id-dropdown", "value"))
 def update_pl_projection_chart(trade_id):
+    if not trade_id:
+        return {}
+
     projections = get_trade_pl_projections(trade_id)
     if projections.empty:
         return {}
+
     return {
-        "data": [{"x": projections["timestamp"], "y": projections["pnl"], "type": "line"}],
+        "data": [
+            {"x": projections["timestamp"], "y": projections["pnl"], "type": "line", "name": "P/L"}
+        ],
         "layout": {"title": f"P/L Projections for Trade {trade_id}"},
     }
 
@@ -215,28 +254,14 @@ def update_pl_projection_chart(trade_id):
 @callback(Output("gamma-exposure-chart", "figure"), Input("gamma-expiry-dropdown", "value"))
 def update_gamma_exposure_chart(expiration_date):
     if not expiration_date:
-        return {
-            "layout": {
-                "title": "Please select an expiration date",
-                "xaxis": {"title": "Strike Price"},
-                "yaxis": {"title": "Net Gamma Exposure"},
-            }
-        }
+        return {"layout": {"title": "Select an expiration date"}}
 
     df, spot_price = get_gamma_exposure_for_expiry(expiration_date)
     if df.empty:
-        return {
-            "layout": {
-                "title": f"No data for {expiration_date}",
-                "xaxis": {"title": "Strike Price"},
-                "yaxis": {"title": "Net Gamma Exposure"},
-            }
-        }
+        return {"layout": {"title": f"No data for {expiration_date}"}}
 
-    # Define the figure
     fig = Figure()
 
-    # Positive GEX - Blue
     fig.add_trace(
         Bar(
             x=df[df["net_gamma_exposure"] >= 0]["strike"],
@@ -246,7 +271,6 @@ def update_gamma_exposure_chart(expiration_date):
         )
     )
 
-    # Negative GEX - Red
     fig.add_trace(
         Bar(
             x=df[df["net_gamma_exposure"] < 0]["strike"],
@@ -256,7 +280,6 @@ def update_gamma_exposure_chart(expiration_date):
         )
     )
 
-    # Spot Price Line
     if spot_price:
         fig.add_shape(
             type="line",
@@ -267,7 +290,6 @@ def update_gamma_exposure_chart(expiration_date):
             line=dict(color="black", dash="dash"),
         )
 
-    # Zero Line
     fig.add_shape(
         type="line",
         x0=df["strike"].min(),
@@ -277,7 +299,6 @@ def update_gamma_exposure_chart(expiration_date):
         line=dict(color="gray", dash="dot"),
     )
 
-    # Update layout
     fig.update_layout(
         title=(
             f"GEX on {expiration_date} | Spot ≈ {spot_price:.2f}"

@@ -243,3 +243,21 @@ def get_gamma_exposure_surface_data(
     except Exception as e:
         logging.error(f"Error generating 3D Gamma Exposure surface plot: {e}")
         return Figure(layout={"title": "Error generating 3D Gamma Exposure surface."})
+
+
+def get_trade_ids() -> List[str]:
+    """
+    Fetch distinct trade IDs for P/L Analysis dropdown.
+    """
+    query = f"""
+        SELECT DISTINCT trade_id 
+        FROM `{TRADE_RECOMMENDATIONS_TABLE}`
+        ORDER BY trade_id DESC
+        LIMIT 100
+    """
+    try:
+        df = CLIENT.query(query).to_dataframe()
+        return df["trade_id"].tolist()
+    except Exception as e:
+        logging.error(f"Error fetching trade IDs: {e}")
+        return []
