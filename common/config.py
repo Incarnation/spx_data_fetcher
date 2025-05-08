@@ -20,6 +20,9 @@ GEX_INTERVAL_MIN = 15
 SUPPORTED_SYMBOLS = ["SPX"]
 SOURCE = "tradier"
 INDEX_PRICE_TIME_INTERVAL = "5m"
+MODEL_VERSION = "v0.1"
+TARGET_DELTA = 0.1
+WING_WIDTH = 10
 
 # Sanity checks (optional but helpful for debugging)
 REQUIRED_VARS = {
