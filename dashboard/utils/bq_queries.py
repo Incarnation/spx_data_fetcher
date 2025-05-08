@@ -29,23 +29,24 @@ CLIENT = bigquery.Client(credentials=CREDENTIALS, project=GOOGLE_CLOUD_PROJECT)
 
 def get_available_expirations() -> List[str]:
     """
-    Returns a list of recent expiration dates available in the gamma exposure table.
+    Returns a list of upcoming expiration dates (today or later)
+    available in the gamma_exposure table, formatted as YYYY‑MM‑DD.
     """
     query = f"""
-        SELECT DISTINCT expiration_date
-        FROM `{TABLE_ID}`
-        ORDER BY expiration_date DESC
-        LIMIT 30
+    SELECT
+      expiration_date
+    FROM `{TABLE_ID}`
+    WHERE expiration_date >= CURRENT_DATE()
+    GROUP BY expiration_date
+    ORDER BY expiration_date DESC
+    LIMIT 30
     """
     try:
         df = CLIENT.query(query).to_dataframe()
 
-        # Ensure conversion to datetime
+        # make sure it's a datetime and format as string
         df["expiration_date"] = pd.to_datetime(df["expiration_date"], errors="coerce")
-
-        # Drop any rows where the conversion failed (e.g., invalid dates)
         df = df.dropna(subset=["expiration_date"])
-
         return df["expiration_date"].dt.strftime("%Y-%m-%d").tolist()
 
     except Exception as e:
