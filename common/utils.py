@@ -4,7 +4,7 @@
 # =====================
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, time
 
 import pytz
 
@@ -26,10 +26,17 @@ def setup_logging():
     logging.basicConfig(level=logging.INFO, handlers=[console_handler])
 
 
-def is_trading_hours():
-    now = datetime.now(pytz.timezone("US/Eastern"))
-    return (
-        now.weekday() < 5
-        and (now.hour > 9 or (now.hour == 9 and now.minute >= 30))
-        and now.hour < 16
-    )
+def is_trading_hours() -> bool:
+    """
+    True from 9:30 AM through 4:00 PM Eastern, Mon–Fri,
+    excluding U.S. federal holidays.
+    """
+    eastern = pytz.timezone("US/Eastern")
+    now = datetime.now(eastern)
+
+    # 1) Mon–Fri only
+    if now.weekday() >= 5:
+        return False
+
+    # 3) Market open/close inclusive
+    return time(9, 30) <= now.time() <= time(16, 0)

@@ -1,7 +1,6 @@
-# =====================
 # fetcher/scheduler.py
-# Runs fetch every 10 minutes during trading hours for multiple symbols
-# Also schedules analytics jobs
+# =====================
+# Orchestrator: fetch market data, run analytics, generate trades, monitor PnL
 # =====================
 
 import logging
@@ -20,117 +19,87 @@ from fetcher.uploader import upload_index_price, upload_to_bigquery
 from trade.pnl_monitor import update_trade_pnl
 from trade.trade_generator import generate_0dte_trade
 
-# Set the timezone to Eastern Time (EST/EDT)
+# Use Eastern Time for all market‑hours scheduling
 NY_TZ = pytz.timezone("America/New_York")
 scheduler = BackgroundScheduler(timezone=NY_TZ)
 
 
 def debug_heartbeat():
-    logging.info("💓 Heartbeat: scheduler is alive.")
+    logging.info("💓 Heartbeat alive.")
 
 
 def scheduled_upload_index_price():
-    """Fetch and upload index price for each supported symbol."""
+    """Every 5m in market hours, fetch & upload SPX index price."""
     if not is_trading_hours():
-        logging.info("⏳ Market closed, skipping index price upload.")
         return
-
-    for symbol in SUPPORTED_SYMBOLS:
-        try:
-            quote = fetch_underlying_quote(symbol)
-            upload_index_price(symbol, quote)
-            logging.info(f"✅ Uploaded index price for {symbol}")
-        except Exception as e:
-            logging.exception(f"💥 Failed to upload index price for {symbol}: {e}")
+    for sym in SUPPORTED_SYMBOLS:
+        q = fetch_underlying_quote(sym)
+        upload_index_price(sym, q)
 
 
 def scheduled_fetch_and_upload_options_data():
-    """Fetch option chains and upload to BigQuery."""
+    """Every 10m in market hours, fetch & upload SPX option chains."""
     if not is_trading_hours():
-        logging.info("⏳ Market closed, skipping option chain fetch.")
         return
-
     now = datetime.now(timezone.utc)
-
-    for symbol in SUPPORTED_SYMBOLS:
-        try:
-            quote = fetch_underlying_quote(symbol)
-            expirations = get_next_expirations(symbol)
-
-            for expiry in expirations:
-                options = fetch_option_chain(symbol, expiry, quote)
-                if options:
-                    upload_to_bigquery(options, now, expiry, quote)
-                    logging.info(f"✅ {symbol} {expiry} - {len(options)} options uploaded.")
-                else:
-                    logging.warning(f"⚠️ No options fetched for {symbol} {expiry}")
-        except Exception as e:
-            logging.exception(f"💥 Error processing {symbol}: {e}")
+    for sym in SUPPORTED_SYMBOLS:
+        quote = fetch_underlying_quote(sym)
+        exps = get_next_expirations(sym)
+        for exp in exps:
+            opts = fetch_option_chain(sym, exp, quote)
+            if opts:
+                upload_to_bigquery(opts, now, exp, quote)
 
 
 def start_scheduler():
-    """Initialize and start the background scheduler."""
+    """Wire up all jobs and start the background scheduler."""
     if scheduler.running:
         scheduler.remove_all_jobs()
-        logging.info("♻️ Cleaned up existing jobs.")
 
-    # Heartbeat every 10 minutes (24/7)
-    scheduler.add_job(
-        debug_heartbeat,
-        CronTrigger(minute="0,10,20,30,40,50", timezone=NY_TZ),
-    )
+    # 1) Heartbeat (every 10m, all day)
+    scheduler.add_job(debug_heartbeat, CronTrigger(minute="0,10,20,30,40,50", timezone=NY_TZ))
 
-    # Index price upload every 5 minutes from 9:30 AM to 4:00 PM EST
+    # 2) Market‑hours tasks: 9:30–15:55 ET
+    market_cron = dict(day_of_week="mon-fri", hour="9-15")
     scheduler.add_job(
         scheduled_upload_index_price,
-        CronTrigger(
-            day_of_week="mon-fri",
-            hour="9-16",
-            minute="0,5,10,15,20,25,30,35,40,45,50,55",
-            timezone=NY_TZ,
-        ),
+        CronTrigger(**market_cron, minute="0,5,10,15,20,25,30,35,40,45,50,55", timezone=NY_TZ),
     )
-
-    # Options data fetch every 10 minutes from 9:30 AM to 4:00 PM EST
     scheduler.add_job(
         scheduled_fetch_and_upload_options_data,
-        CronTrigger(day_of_week="mon-fri", hour="9-16", minute="0,10,20,30,40,50", timezone=NY_TZ),
+        CronTrigger(**market_cron, minute="0,10,20,30,40,50", timezone=NY_TZ),
     )
-
-    # GEX calculation every 15 minutes from 9:30 AM to 4:00 PM EST
     scheduler.add_job(
-        calculate_and_store_gex,
-        CronTrigger(day_of_week="mon-fri", hour="9-16", minute="0,15,30,45", timezone=NY_TZ),
+        calculate_and_store_gex, CronTrigger(**market_cron, minute="0,15,30,45", timezone=NY_TZ)
     )
-
-    # Realized volatility every 5 minutes from 9:30 AM to 4:00 PM EST
     scheduler.add_job(
         calculate_and_store_realized_vol,
-        CronTrigger(
-            day_of_week="mon-fri",
-            hour="9-16",
-            minute="0,5,10,15,20,25,30,35,40,45,50,55",
-            timezone=NY_TZ,
-        ),
+        CronTrigger(**market_cron, minute="0,5,10,15,20,25,30,35,40,45,50,55", timezone=NY_TZ),
     )
+    scheduler.add_job(update_trade_pnl, CronTrigger(**market_cron, minute="*/5", timezone=NY_TZ))
 
-    # Schedule 0DTE Iron Condor generation at 10AM, 11AM, 12PM, 1PM
+    # 3) Final EOD run at 16:00 ET
+    eod_trigger = CronTrigger(day_of_week="mon-fri", hour="16", minute="0", timezone=NY_TZ)
+    for fn in (
+        scheduled_upload_index_price,
+        scheduled_fetch_and_upload_options_data,
+        calculate_and_store_gex,
+        calculate_and_store_realized_vol,
+        update_trade_pnl,
+    ):
+        scheduler.add_job(fn, eod_trigger)
+
+    # 4) 0DTE Iron Condor generator at 10,11,12,13 sharp
     scheduler.add_job(
-        generate_0dte_trade, "cron", day_of_week="mon-fri", hour="10,11,12,13", minute="0"
+        generate_0dte_trade,
+        CronTrigger(day_of_week="mon-fri", hour="10,11,12,13", minute="0", timezone=NY_TZ),
     )
-
-    # PnL Monitoring every 5 minutes until 3:55 PM ET
-    scheduler.add_job(update_trade_pnl, "cron", day_of_week="mon-fri", hour="9-15", minute="*/5")
-
-    # Final PnL update at 4 PM ET
-    scheduler.add_job(update_trade_pnl, "cron", day_of_week="mon-fri", hour="16", minute="0")
 
     scheduler.start()
-    logging.info("📅 Scheduler started for 9:30 AM to 4:00 PM EST.")
+    logging.info("📅 Scheduler running: market hours + trade/PnL jobs.")
 
 
 def shutdown_scheduler():
-    """Shutdown the scheduler if running."""
     if scheduler.running:
         scheduler.shutdown()
-        logging.info("🛑 Scheduler shut down.")
+        logging.info("🛑 Scheduler stopped.")
