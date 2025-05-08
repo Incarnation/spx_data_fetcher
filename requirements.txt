@@ -12,6 +12,5 @@ apscheduler==3.10.4
 dash==2.16.1
 requests==2.31.0
 Flask-Caching>=2.0.2
-holidays==0.21.18
 
 
