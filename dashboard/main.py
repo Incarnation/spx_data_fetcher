@@ -32,7 +32,7 @@ from utils.bq_queries import (
 )
 
 # Init Dash app
-app = Dash(__name__)
+app = Dash(__name__, suppress_callback_exceptions=True)
 app.title = "📊 Multi-Strategy Trading Dashboard"
 cache = Cache(app.server, config={"CACHE_TYPE": "SimpleCache"})
 
@@ -85,6 +85,7 @@ def render_content(tab):
         return render_live_pnl_tab()
     elif tab == "tab-pl-analysis":
         return render_pl_analysis_tab()
+
     return html.Div("Invalid tab selected")
 
 
