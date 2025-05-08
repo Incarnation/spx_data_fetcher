@@ -30,8 +30,8 @@ test:
 	pytest tests/
 
 lint:
-	black fetcher/ dashboard/ tests/ analytics/ workers/ common/
-	isort fetcher/ dashboard/ tests/ analytics/ workers/ common/
+	black fetcher/ dashboard/ tests/ analytics/ workers/ common/ trade/
+	isort fetcher/ dashboard/ tests/ analytics/ workers/ common/ trade/
 
 # === DOCKER ===
 docker-build:

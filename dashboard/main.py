@@ -177,17 +177,17 @@ def render_live_pnl_tab():
 
 @callback(Output("pnl-table", "children"), Input("pnl-update-interval", "n_intervals"))
 def update_live_pnl_table(n_intervals):
-    pnl_df = get_live_pnl_data()
-    if pnl_df.empty:
+    pnl_data = get_live_pnl_data()
+    if pnl_data.empty:
         return html.Div("No open trades found.")
 
-    # Render as a simple HTML table
     return html.Table(
-        children=[html.Tr([html.Th(col) for col in pnl_df.columns])]
+        children=[html.Tr([html.Th(col) for col in pnl_data.columns])]
         + [
-            html.Tr([html.Td(pnl_df.iloc[i][col]) for col in pnl_df.columns])
-            for i in range(len(pnl_df))
-        ]
+            html.Tr([html.Td(pnl_data.iloc[i][col]) for col in pnl_data.columns])
+            for i in range(len(pnl_data))
+        ],
+        style={"width": "100%", "border": "1px solid black"},
     )
 
 
