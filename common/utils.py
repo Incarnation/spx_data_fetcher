@@ -31,8 +31,7 @@ def is_trading_hours() -> bool:
     True from 9:30 AM through 4:00 PM Eastern, Mon–Fri,
     excluding U.S. federal holidays.
     """
-    eastern = pytz.timezone("US/Eastern")
-    now = datetime.now(eastern)
+    now = datetime.now(pytz.timezone("US/Eastern"))
 
     # 1) Mon–Fri only
     if now.weekday() >= 5:
