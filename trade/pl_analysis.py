@@ -1,12 +1,15 @@
-# =====================
 # trade/pl_analysis.py
 # =====================
 # Compute and store P/L analysis for a given trade_id
+# Refactored to accept legs_data and spot_price parameters.
 # =====================
+
 import logging
 from datetime import datetime, timezone
+from typing import Optional
 
 import numpy as np
+import pandas as pd
 from google.cloud import bigquery
 
 from common.auth import get_gcp_credentials
@@ -24,73 +27,85 @@ CLIENT = bigquery.Client(credentials=CREDS, project=GOOGLE_CLOUD_PROJECT)
 
 
 def compute_and_store_pl_analysis(
-    trade_id: str, grid_points: int = 200, underlying_range: float = 0.2
+    trade_id: str,
+    legs_data: Optional[pd.DataFrame] = None,
+    spot_price: Optional[float] = None,
+    grid_points: int = 200,
+    underlying_range: float = 0.2,
 ):
     """
-    For the given trade_id:
-      1) Load its legs (strike, direction, type, entry_price).
-      2) Fetch current SPX spot and build a grid ±underlying_range around spot.
-      3) Compute the portfolio payoff at expiry (in index‐points), then scale to dollars.
-      4) Compute max_profit, max_loss, breakeven points, probability of profit.
-      5) Fetch the freshest greeks (Δ & Θ) for each leg, signed by direction.
-      6) Sum to trade‑level Δ & Θ and write one row to analytics.trade_pl_analysis.
+    For the given trade_id, compute and store P/L analysis.
+
+    Args:
+        trade_id: Identifier of the trade.
+        legs_data: Optional DataFrame with columns ['leg_type','direction','strike','entry_price'].
+                   If provided, skip querying BigQuery for leg info.
+        spot_price: Optional current SPX spot price. If provided, skip querying BigQuery for spot.
+        grid_points: Number of points in underlying price grid.
+        underlying_range: Fractional range around spot for the grid.
     """
     logging.info("🔍 Computing P/L analysis for trade %s", trade_id)
     try:
-        # 1️⃣ Load trade legs
-        legs_sql = f"""
-            SELECT leg_type, direction, strike, entry_price
-            FROM `{TRADE_LEGS_TABLE}`
-            WHERE trade_id = @tid
-        """
-        job_conf = bigquery.QueryJobConfig(
-            query_parameters=[bigquery.ScalarQueryParameter("tid", "STRING", trade_id)]
-        )
-        legs_df = CLIENT.query(legs_sql, job_config=job_conf).to_dataframe()
-        if legs_df.empty:
-            logging.warning("No legs found for trade %s, skipping P/L analysis", trade_id)
-            return
+        # 1️⃣ Load trade legs from passed-in data or BigQuery
+        if legs_data is not None:
+            legs_df = legs_data.copy()
+            logging.debug("Using passed-in legs_data for trade %s", trade_id)
+        else:
+            # Fallback to BigQuery query if legs_data not supplied
+            legs_sql = f"""
+                SELECT leg_type, direction, strike, entry_price
+                FROM `{TRADE_LEGS_TABLE}`
+                WHERE trade_id = @tid
+            """
+            job_conf = bigquery.QueryJobConfig(
+                query_parameters=[bigquery.ScalarQueryParameter("tid", "STRING", trade_id)]
+            )
+            legs_df = CLIENT.query(legs_sql, job_config=job_conf).to_dataframe()
+            if legs_df.empty:
+                logging.warning("No legs found for trade %s, skipping P/L analysis", trade_id)
+                return
 
-        # 2️⃣ Fetch current SPX spot price
-        spot_sql = f"""
-            SELECT last AS spot
-            FROM `{INDEX_PRICE_TABLE}`
-            WHERE symbol = 'SPX'
-            ORDER BY timestamp DESC
-            LIMIT 1
-        """
-        spot = CLIENT.query(spot_sql).to_dataframe()["spot"].iloc[0]
+        # 2️⃣ Determine SPX spot price from passed-in value or BigQuery
+        if spot_price is not None:
+            spot = spot_price
+            logging.debug("Using passed-in spot_price for trade %s", trade_id)
+        else:
+            spot_sql = f"""
+                SELECT last AS spot
+                FROM `{INDEX_PRICE_TABLE}`
+                WHERE symbol = 'SPX'
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """
+            spot = CLIENT.query(spot_sql).to_dataframe()["spot"].iloc[0]
 
-        # 3️⃣ Build underlying price grid (from spot*(1−range) to spot*(1+range))
+        # 3️⃣ Build underlying price grid around spot
         low, high = spot * (1 - underlying_range), spot * (1 + underlying_range)
         S = np.linspace(low, high, grid_points)  # underlying price axis
 
-        # 4️⃣ Compute portfolio payoff at expiry **in index‐points**
+        # 4️⃣ Compute portfolio payoff at expiry, in index-points
         payoff = np.zeros_like(S)
         for _, leg in legs_df.iterrows():
             K = leg["strike"]
             ent = leg["entry_price"]
             sign = 1 if leg["direction"] == "long" else -1
 
-            # option intrinsic payoff
             if leg["leg_type"] == "call":
-                # long call payoff = max(S−K,0); short = −max(S−K,0)
                 payoff += sign * np.maximum(S - K, 0)
             else:
-                # long put payoff = max(K−S,0); short = −max(K−S,0)
                 payoff += sign * np.maximum(K - S, 0)
 
-            # subtract cost (premium paid or received)
+            # subtract premium paid/received
             payoff -= sign * ent
 
-        # 4️⃣➕ Scale from “points” to **dollars** using contract multiplier = 100
+        # Scale from points to dollars (contract multiplier = 100)
         payoff *= 100
 
         # 5️⃣ Compute key metrics in dollars
-        max_profit = float(np.max(payoff))  # best-case P/L
-        max_loss = float(np.min(payoff))  # worst-case P/L
+        max_profit = float(np.max(payoff))
+        max_loss = float(np.min(payoff))
 
-        # breakeven points are price levels where payoff crosses zero
+        # Breakeven points: where payoff crosses zero
         crossings = np.where(np.diff(np.sign(payoff)) != 0)[0]
         if crossings.size:
             breakeven_lower = float(S[crossings[0]])
@@ -98,15 +113,15 @@ def compute_and_store_pl_analysis(
         else:
             breakeven_lower = breakeven_upper = float("nan")
 
-        # probability of profit ≈ fraction of grid points with P/L > 0
+        # Probability of profit: fraction of grid where P/L > 0
         prob_profit = float((payoff > 0).sum() / len(payoff) * 100)
 
-        # 6️⃣ Fetch freshest greeks per leg (signed by direction)
+        # 6️⃣ Fetch latest greeks for each leg via BigQuery
         greek_sql = f"""
             SELECT
               direction,
-              delta  * CASE WHEN direction='long' THEN 1 ELSE -1 END AS signed_delta,
-              theta  * CASE WHEN direction='long' THEN 1 ELSE -1 END AS signed_theta
+              delta * CASE WHEN direction='long' THEN 1 ELSE -1 END AS signed_delta,
+              theta * CASE WHEN direction='long' THEN 1 ELSE -1 END AS signed_theta
             FROM (
               SELECT
                 tl.direction,
@@ -118,10 +133,10 @@ def compute_and_store_pl_analysis(
                 ) AS rn
               FROM `{TRADE_LEGS_TABLE}` AS tl
               JOIN `{OPTION_SNAPSHOT_TABLE}` AS os
-                ON tl.strike   = os.strike
+                ON tl.strike = os.strike
                AND tl.leg_type = os.option_type
               WHERE tl.trade_id = @tid
-                AND os.symbol    = 'SPXW'   -- only today's weekly SPX options
+                AND os.symbol    = 'SPXW'
             ) AS sub
             WHERE sub.rn = 1
         """
@@ -154,7 +169,10 @@ def compute_and_store_pl_analysis(
             return
 
         logging.info(
-            "✅ Stored P/L analysis for %s: profit=%.2f, loss=%.2f", trade_id, max_profit, max_loss
+            "✅ Stored P/L analysis for %s: profit=%.2f, loss=%.2f",
+            trade_id,
+            max_profit,
+            max_loss,
         )
 
     except Exception:

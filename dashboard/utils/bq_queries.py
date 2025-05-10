@@ -88,13 +88,7 @@ def get_legs_data(trade_id: str):
         pd.DataFrame: Dataframe containing leg_id, strike, direction, leg_type, entry_price, and status.
     """
     query = f"""
-        SELECT 
-            leg_id,
-            strike,
-            direction,
-            leg_type,
-            entry_price,
-            status
+        SELECT leg_id, strike, direction, leg_type, entry_price, exit_price, pnl, status
         FROM `{TRADE_LEGS_TABLE}`
         WHERE trade_id = @trade_id
         ORDER BY strike ASC

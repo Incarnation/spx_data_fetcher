@@ -2,6 +2,7 @@
 # =====================
 # Multi‑Strategy Trade Generator (0DTE Iron Condor & Vertical Spreads)
 # Always uses mid‑prices from your option_chain_snapshot for entry P/L math.
+# Refactored to pass legs_data and spot_price to P/L analysis to avoid redundant queries.
 # =====================
 
 import logging
@@ -46,12 +47,12 @@ def generate_0dte_trade(strategy_type: str = "iron_condor"):
     4) Always compute entry mid‑prices as (bid+ask)/2.
     5) Sum signed mid‑prices → net entry_price.
     6) Insert into trade_recommendations & trade_legs.
-    7) Trigger P/L analysis.
+    7) Trigger P/L analysis, passing data to avoid redundant BQ queries.
     """
     logging.info("🔎 Generating 0DTE %s...", strategy_type)
 
     try:
-        # 1️⃣ Get SPX spot
+        # 1️⃣ Get the latest SPX spot price
         price_sql = f"""
           SELECT last
           FROM `{IDX_PRICE}`
@@ -65,12 +66,12 @@ def generate_0dte_trade(strategy_type: str = "iron_condor"):
             return
         spot = spot_df["last"].iloc[0]
 
-        # timestamps
+        # Record timestamps
         now_dt = datetime.now(timezone.utc)
         now_iso = now_dt.isoformat()
         expiry = now_dt.date().isoformat()
 
-        # 2️⃣ Freshest snapshot per strike+type
+        # 2️⃣ Freshest snapshot per strike+option_type
         opts_sql = f"""
           SELECT strike,
                  option_type,
@@ -109,7 +110,7 @@ def generate_0dte_trade(strategy_type: str = "iron_condor"):
             if puts.empty or calls.empty:
                 logging.warning("Missing puts/calls; skipping.")
                 return
-            # pick nearest‐TARGET_DELTA strikes
+            # find strikes closest to TARGET_DELTA
             puts["dd"] = (puts.delta.abs() - TARGET_DELTA).abs()
             calls["dd"] = (calls.delta.abs() - TARGET_DELTA).abs()
 
@@ -141,20 +142,19 @@ def generate_0dte_trade(strategy_type: str = "iron_condor"):
             logging.error("Unknown strategy_type: %s", strategy_type)
             return
 
-        # 4️⃣ Build a mid-price map
-        #    mid = (bid + ask)/2
+        # 4️⃣ Build mid-price mapping
         opts_df["mid_price"] = (opts_df["bid"] + opts_df["ask"]) / 2.0
         price_map = opts_df.set_index(["strike", "option_type"])["mid_price"].to_dict()
 
-        # ensure no missing
+        # validate no missing prices
         missing = [L for L in legs if (L["strike"], L["type"]) not in price_map]
         if missing:
             logging.error("Missing mid_price for %s; aborting.", missing)
             return
 
-        # 5️⃣ Compute net entry as sum(sign * mid_price)
+        # 5️⃣ Compute net entry price (sum of signed mid-prices)
         entry_price = sum(
-            price_map[(L["strike"], L["type"])] * (1 if L["direction"] == "long" else -1)
+            price_map[(L["strike"], L["type"])].__mul__(1 if L["direction"] == "long" else -1)
             for L in legs
         )
 
@@ -177,7 +177,7 @@ def generate_0dte_trade(strategy_type: str = "iron_condor"):
             logging.error("❌ Insert rec errors: %s", errs)
             return
 
-        # 7️⃣ Insert each leg with its mid_price
+        # 7️⃣ Insert each leg into trade_legs
         leg_rows = []
         for L in legs:
             lid = f"{trade_id}_{L['type'].upper()}_{L['strike']}"
@@ -189,7 +189,7 @@ def generate_0dte_trade(strategy_type: str = "iron_condor"):
                     "leg_type": L["type"],
                     "direction": L["direction"],
                     "strike": L["strike"],
-                    "entry_price": price_map[(L["strike"], L["type"])],  # mid_price
+                    "entry_price": price_map[(L["strike"], L["type"])],
                     "status": "open",
                     "notes": f"{L['direction']} {L['type']} @ {L['strike']}",
                 }
@@ -201,8 +201,21 @@ def generate_0dte_trade(strategy_type: str = "iron_condor"):
 
         logging.info("✅ Generated %s with legs %s", trade_id, legs)
 
-        # 8️⃣ Kick‑off the P/L analysis job
-        compute_and_store_pl_analysis(trade_id)
+        # 8️⃣ Prepare and pass data to P/L analysis to avoid redundant BigQuery queries
+        # Build a DataFrame with only the necessary columns
+        legs_df_for_analysis = pd.DataFrame(leg_rows)[
+            [
+                "leg_type",
+                "direction",
+                "strike",
+                "entry_price",
+            ]
+        ]
+
+        # Trigger P/L analysis, supplying legs_data and spot
+        compute_and_store_pl_analysis(
+            trade_id=trade_id, legs_data=legs_df_for_analysis, spot_price=spot
+        )
 
     except Exception:
         logging.exception("❌ Error in generate_0dte_trade()")
