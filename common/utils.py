@@ -39,4 +39,4 @@ def is_trading_hours() -> bool:
         return False
 
     # 3) Market open/close inclusive
-    return time(9, 30) <= now.time() <= time(16, 0)
+    return time(9, 30) <= now.time() <= time(16, 1)  # allow up to 16:00:59
