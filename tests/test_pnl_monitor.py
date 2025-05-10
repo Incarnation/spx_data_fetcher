@@ -3,9 +3,21 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
-import pytz
 
 import trade.pnl_monitor as pnl_monitor
+
+
+class DummyDateTimeFactory:
+    def __init__(self, fixed):
+        self.fixed = fixed
+
+    def __call__(self, cls):
+        class DT(cls):
+            @classmethod
+            def now(cls, tz=None):
+                return self.fixed
+
+        return DT
 
 
 @pytest.fixture(autouse=True)
@@ -287,3 +299,58 @@ def test_eod_time_boundary(monkeypatch, dummy_client, sample_leg_df):
         _, rows = dummy_client.insert_rows_json.call_args[0]
         assert rows[0]["status"] == expected, f"Minute {minute}: expected status {expected}"
         assert dummy_client.query.called
+
+
+# Iron condor: four-leg intraday
+@pytest.fixture
+def iron_condor_df():
+    legs = []
+    for leg_id, leg in enumerate(
+        [
+            (5725.0, "call", "long", 0.425),
+            (5715.0, "call", "short", 0.575),
+            (5615.0, "put", "short", 2.575),
+            (5605.0, "put", "long", 1.700),
+        ],
+        start=1,
+    ):
+        legs.append(
+            {
+                "trade_id": "T1",
+                "leg_id": f"L{leg_id}",
+                "strike": leg[0],
+                "leg_type": leg[1],
+                "direction": leg[2],
+                "entry_price": leg[3],
+                "expiration_date": pd.Timestamp("2025-05-15").date(),
+            }
+        )
+    return pd.DataFrame(legs)
+
+
+def test_iron_condor_intraday_rollup(monkeypatch, dummy_client, iron_condor_df):
+    dummy_client.query.return_value.to_dataframe.return_value = iron_condor_df
+    fixed = datetime(2025, 5, 10, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(pnl_monitor, "datetime", DummyDateTimeFactory(fixed)(datetime))
+    # Define current mid prices to yield known PnL:
+    # long call: current=0.5 => +0.075 pts; short call curr=0.4 => +0.175; short put curr=2.6=>-0.025; long put curr=1.65=>-0.05
+    mids = {
+        (5725.0, "call"): 0.500,
+        (5715.0, "call"): 0.400,
+        (5615.0, "put"): 2.600,
+        (5605.0, "put"): 1.650,
+    }
+    mid_maps = {pd.Timestamp("2025-05-15").date(): mids}
+    pnl_monitor.update_trade_pnl("SPX", quote={"last": 5700}, mid_maps=mid_maps)
+    # Assert each leg snapshot PnL in points
+    _, rows = dummy_client.insert_rows_json.call_args_list[0][0]  # first call
+    raw_pts = [row["theoretical_pnl"] for row in rows]
+    expected = [0.075, 0.175, -0.025, -0.05]
+    for got, exp in zip(raw_pts, expected):
+        assert pytest.approx(exp, rel=1e-6) == got
+    # Assert total rolled-up PnL in dollars
+    rec = [c for c in dummy_client.query.call_args_list if "trade_recommendations" in c[0][0]][-1]
+    params = {p.name: p.value for p in rec[1]["job_config"].query_parameters}
+    total_pts = sum(expected)
+    assert params["pnl"] == pytest.approx(total_pts * 100)
+    assert params["status"] == "active"
