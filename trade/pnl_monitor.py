@@ -1,43 +1,60 @@
 # trade/pnl_monitor.py
 # =====================
-# PnL Monitoring: snapshot legs → live_trade_pnl,
-# then per‑row UPDATE of trade_legs & trade_recommendations.
-# Refactored to fetch latest mid prices and underlying spot via Tradier API.
+# PnL Monitoring: compute & persist live and end‑of‑day PnL for each symbol’s open trades.
+# Supports any list of SUPPORTED_SYMBOLS by filtering on `symbol`.
 # =====================
 
 import logging
 from datetime import datetime, timezone
+from typing import Dict, Tuple
 
 import pytz
 from google.cloud import bigquery
 from google.cloud.bigquery import QueryJobConfig, ScalarQueryParameter
 
 from common.auth import get_gcp_credentials
-from common.config import GOOGLE_CLOUD_PROJECT, SPX
-from fetcher.fetcher import fetch_option_chain, fetch_underlying_quote
+from common.config import GOOGLE_CLOUD_PROJECT
 
-# Table names
+# ── Fully qualified BigQuery table names ─────────────────────────────────────
 TRADE_LEGS = f"{GOOGLE_CLOUD_PROJECT}.analytics.trade_legs"
 TRADE_RECS = f"{GOOGLE_CLOUD_PROJECT}.analytics.trade_recommendations"
 LIVE_PNL = f"{GOOGLE_CLOUD_PROJECT}.analytics.live_trade_pnl"
 PL_ANALYSIS = f"{GOOGLE_CLOUD_PROJECT}.analytics.trade_pl_analysis"
 
-# BigQuery client
-CLIENT = bigquery.Client(credentials=get_gcp_credentials(), project=GOOGLE_CLOUD_PROJECT)
+# ── Initialize one BigQuery client for all operations ─────────────────────────
+CLIENT = bigquery.Client(
+    credentials=get_gcp_credentials(),
+    project=GOOGLE_CLOUD_PROJECT,
+)
+
+# ── Use the same NY timezone for EOD detection ────────────────────────────────
+NY_TZ = pytz.timezone("America/New_York")
 
 
-def update_trade_pnl():
+def update_trade_pnl(
+    symbol: str, quote: dict = None, mid_maps: Dict[str, Dict[Tuple[float, str], float]] = None
+):
     """
-    1) Snapshot each open leg’s current mid & raw PnL into live_trade_pnl.
-    2) Update trade_legs & trade_recommendations using latest data fetched via Tradier API.
+    Compute and update PnL for all open trades of a given symbol.
+
+    Args:
+      symbol   (str): e.g. "SPX" or "QQQ"
+      quote    (dict): underlying quote dict from Tradier, must contain 'last'
+      mid_maps (dict): {
+                         expiration_date -> {
+                           (strike, option_type) -> mid_price
+                         }
+                       }
+                       if None, fall back to entry price.
     """
-    # ── 0️⃣ Get current time and determine EOD window ─────────────────────────
+    # ── 0️⃣  Determine current time in UTC & ET ─────────────────────────────
     now_utc = datetime.now(timezone.utc)
-    now_et = now_utc.astimezone(pytz.timezone("US/Eastern"))
-    is_eod = now_et.hour == 16 and 0 <= now_et.minute < 5
+    now_et = now_utc.astimezone(NY_TZ)
+    # Treat 16:00–16:04 ET as end‑of‑day closure window
+    is_eod = now_et.hour == 16 and now_et.minute < 5
     now_iso = now_utc.isoformat()
 
-    # ── 1️⃣ Fetch all open legs along with their expiration_date ────────────────
+    # ── 1️⃣  Load all open legs for THIS symbol, joining on recommendation info ─
     legs_sql = f"""
         SELECT t.trade_id,
                t.leg_id,
@@ -49,55 +66,48 @@ def update_trade_pnl():
         FROM `{TRADE_LEGS}` AS t
         JOIN `{TRADE_RECS}` AS r USING(trade_id)
         WHERE t.status = 'open'
+          AND r.symbol = @symbol
     """
-    legs_df = CLIENT.query(legs_sql).to_dataframe()
+    legs_df = CLIENT.query(
+        legs_sql,
+        job_config=QueryJobConfig(
+            query_parameters=[ScalarQueryParameter("symbol", "STRING", symbol)]
+        ),
+    ).to_dataframe()
+
+    # If no open legs found, nothing to do
     if legs_df.empty:
-        logging.info("No open legs to process.")
+        logging.info("[%s] No open legs to process.", symbol)
         return
 
-    # ── 2️⃣ Fetch current underlying quote and spot price via API ──────────────
-    quote = fetch_underlying_quote(SPX)
-    underlying = quote.get("last")
-    if underlying is None:
-        logging.warning("⚠️ Missing underlying price from API; aborting.")
+    # ── 2️⃣  Validate underlying quote ───────────────────────────────────────
+    if not quote or "last" not in quote:
+        logging.warning("[%s] Missing underlying quote; skipping PnL update.", symbol)
         return
+    underlying = float(quote["last"])
 
-    # ── 3️⃣ For each unique expiration_date, fetch option chain and build mid_map ─
-    mid_maps = {}
-    for expiry in legs_df["expiration_date"].unique():
-        # fetch full chain (200 strikes around current price)
-        opts = fetch_option_chain(SPX, expiry, quote)
-        # determine which (strike,option_type) pairs we need
-        needed = set(
-            (row.strike, row.leg_type)
-            for _, row in legs_df[legs_df.expiration_date == expiry].iterrows()
-        )
-        # build a mapping of mid_price for needed legs
-        mid_map = {}
-        for o in opts:
-            key = (o["strike"], o["option_type"])
-            if key in needed:
-                mid_map[key] = (o["bid"] + o["ask"]) / 2.0
-        mid_maps[expiry] = mid_map
+    # Will accumulate raw PnL (in points) per trade_id
+    trade_totals: Dict[str, float] = {}
 
-    # ── 4️⃣ Iterate over each leg: snapshot PnL and update trade_legs ──────────
-    trade_totals = {}
+    # ── 3️⃣  Iterate through each leg and snapshot & update PnL ─────────────
     for _, leg in legs_df.iterrows():
-        key = (leg.strike, leg.leg_type)
-        # get current mid price or fallback to entry_price
-        current = mid_maps.get(leg.expiration_date, {}).get(key, leg.entry_price)
+        exp_date = leg.expiration_date
+        # Look up mid map for this expiry; default to empty
+        exp_map = (mid_maps or {}).get(exp_date, {})
+        # Find current mid price or fallback to the entry price
+        current = exp_map.get((leg.strike, leg.leg_type), leg.entry_price)
 
-        # compute raw PnL (short: entry - current, long: current - entry)
+        # Compute raw PnL in points: short = entry - current; long = current - entry
         raw_pnl = (
-            leg.entry_price - current if leg.direction == "short" else current - leg.entry_price
+            leg.entry_price - current if leg.direction == "short" else (current - leg.entry_price)
         )
         raw_pnl = float(raw_pnl)
 
-        # determine status and exit_price at EOD
-        new_status = "closed" if is_eod else "open"
+        # Determine new status & exit_price if EOD
+        status = "closed" if is_eod else "open"
         exit_price = float(current) if is_eod else None
 
-        # 4a) Snapshot into live_trade_pnl
+        # ── 3a) Insert a live PnL snapshot into LIVE_PNL table ─────────────
         CLIENT.insert_rows_json(
             LIVE_PNL,
             [
@@ -110,20 +120,20 @@ def update_trade_pnl():
                     "mark_price": current,
                     "underlying_price": underlying,
                     "price_type": "mid",
-                    "underlying_symbol": SPX,
-                    "status": new_status,
+                    "underlying_symbol": symbol,
+                    "status": status,
                 }
             ],
         )
 
-        # 4b) UPDATE trade_legs table
-        set_clauses = [f"pnl = {raw_pnl}", f"status = '{new_status}'"]
+        # ── 3b) Update the trade_legs record with new PnL & status ─────────
+        set_parts = [f"pnl = {raw_pnl}", f"status = '{status}'"]
         if is_eod:
-            set_clauses.append(f"exit_price = {exit_price}")
+            set_parts.append(f"exit_price = {exit_price}")
         CLIENT.query(
             f"""
             UPDATE `{TRADE_LEGS}`
-            SET {', '.join(set_clauses)}
+            SET {', '.join(set_parts)}
             WHERE leg_id = @leg_id
             """,
             job_config=QueryJobConfig(
@@ -131,13 +141,13 @@ def update_trade_pnl():
             ),
         )
 
-        # accumulate raw PnL per trade
+        # Accumulate per-trade raw PnL
         trade_totals[leg.trade_id] = trade_totals.get(leg.trade_id, 0.0) + raw_pnl
 
-    # ── 5️⃣ Roll up per‐trade and UPDATE trade_recommendations ─────────────────
-    for tid, raw_sum in trade_totals.items():
+    # ── 4️⃣  Roll up per-trade totals into trade_recommendations ────────────
+    for trade_id, raw_sum in trade_totals.items():
         if is_eod:
-            # at EOD, fetch precomputed max_profit/max_loss from PL_ANALYSIS
+            # At EOD, possibly use precomputed max_profit/max_loss
             pl_sql = f"""
                 SELECT max_profit, max_loss
                 FROM `{PL_ANALYSIS}`
@@ -148,13 +158,14 @@ def update_trade_pnl():
             pl_df = CLIENT.query(
                 pl_sql,
                 job_config=QueryJobConfig(
-                    query_parameters=[ScalarQueryParameter("tid", "STRING", tid)]
+                    query_parameters=[ScalarQueryParameter("tid", "STRING", trade_id)]
                 ),
             ).to_dataframe()
+
             if not pl_df.empty:
                 p_max = float(pl_df.at[0, "max_profit"])
                 p_min = float(pl_df.at[0, "max_loss"])
-                # fetch short strikes to decide final PnL
+                # Fetch short strikes to decide final payoff
                 info_sql = f"""
                     SELECT direction, leg_type, strike
                     FROM `{TRADE_LEGS}`
@@ -163,7 +174,7 @@ def update_trade_pnl():
                 info_df = CLIENT.query(
                     info_sql,
                     job_config=QueryJobConfig(
-                        query_parameters=[ScalarQueryParameter("tid", "STRING", tid)]
+                        query_parameters=[ScalarQueryParameter("tid", "STRING", trade_id)]
                     ),
                 ).to_dataframe()
                 sp = float(
@@ -172,39 +183,42 @@ def update_trade_pnl():
                 sc = float(
                     info_df.query("direction=='short' and leg_type=='call'")["strike"].iloc[0]
                 )
-                # in‑between shorts → max_profit, else → max_loss
+                # Final = max_profit if underlying in bracket, else max_loss
                 final_pnl = p_max if (sp <= underlying <= sc) else p_min
             else:
+                # Fallback to raw_sum * contract size (100)
                 final_pnl = raw_sum * 100.0
+
+            # EOD exit expressions for SQL update
+            exit_price_expr = "entry_price + @pnl"
+            exit_time_expr = "CURRENT_TIMESTAMP()"
             new_status = "closed"
-            exit_price_sql = "entry_price + @pnl"
-            exit_time_sql = "CURRENT_TIMESTAMP()"
         else:
-            # intraday: simple raw_sum × 100
+            # Intraday: mark PnL as raw_sum * 100, leave status active
             final_pnl = raw_sum * 100.0
             new_status = "active"
-            exit_price_sql = "exit_price"
-            exit_time_sql = "exit_time"
+            exit_price_expr = "exit_price"
+            exit_time_expr = "exit_time"
 
-        # 5a) UPDATE trade_recommendations
+        # ── 4a) Update the trade_recommendations record ─────────────────────
         CLIENT.query(
             f"""
             UPDATE `{TRADE_RECS}`
             SET
               pnl        = @pnl,
               status     = @status,
-              exit_price = {exit_price_sql},
-              exit_time  = {exit_time_sql}
+              exit_price = {exit_price_expr},
+              exit_time  = {exit_time_expr}
             WHERE trade_id = @tid
               AND status != 'closed'
             """,
             job_config=QueryJobConfig(
                 query_parameters=[
-                    ScalarQueryParameter("tid", "STRING", tid),
+                    ScalarQueryParameter("tid", "STRING", trade_id),
                     ScalarQueryParameter("pnl", "FLOAT", final_pnl),
                     ScalarQueryParameter("status", "STRING", new_status),
                 ]
             ),
         )
 
-    logging.info("✅ PnL monitor complete (EOD=%s)", is_eod)
+    logging.info("[%s] PnL monitor complete (EOD=%s)", symbol, is_eod)
