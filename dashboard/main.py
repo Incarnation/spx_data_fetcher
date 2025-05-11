@@ -351,10 +351,13 @@ def _toggle_details(n_clicks):
     )
 
     # Compute total current PnL (closed uses stored pnl, open uses theoretical)
-    total_pnl = merged.apply(
-        lambda row: row.pnl if row.status == "closed" else row.theoretical_pnl,
-        axis=1,
-    ).sum()
+    total_pnl = (
+        merged.apply(
+            lambda row: row.pnl if row.status == "closed" else row.theoretical_pnl,
+            axis=1,
+        ).sum()
+        * 100
+    )
 
     # Build HTML table for each leg
     header = html.Tr(

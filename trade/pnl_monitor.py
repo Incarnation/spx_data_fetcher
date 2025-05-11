@@ -38,23 +38,24 @@ def update_trade_pnl(
     Compute + update PnL for all open trades of one symbol.
 
     Args:
-      symbol   (str): e.g. "SPX" or "QQQ"
-      quote    (dict): underlying quote dict, must contain 'last'
-      mid_maps (dict): {
-                         expiration_date -> {
-                           (strike, option_type) -> mid_price
-                         }
-                       }
-                       if empty/falsy, fallback to entry_price.
+      symbol    (str): e.g. "SPX" or "QQQ"
+      quote     (dict): underlying quote dict, must contain 'last'
+      mid_maps  (dict): {
+                          expiration_date -> {
+                            (strike, option_type) -> mid_price
+                          }
+                        }
+                        For intraday, missing keys fallback to entry_price;
+                        at EOD, missing keys fallback to 0.0 (OTM).
     """
     # ── 0) Timestamp now in UTC & ET, detect EOD status ─────────────────────
     now_utc = datetime.now(timezone.utc)
     now_et = now_utc.astimezone(NY_TZ)
-    # end‑of‑day window: 16:00–16:04 ET
+    # EOD window = 16:00–16:04 ET
     is_eod = now_et.hour == 16 and now_et.minute < 5
     now_iso = now_utc.isoformat()
 
-    # ── 1) SELECT all open legs for this symbol, join on recommendation info ─
+    # ── 1) Fetch all open legs + their trade metadata for this symbol ──────
     legs_sql = f"""
         SELECT t.trade_id,
                t.leg_id,
@@ -75,38 +76,44 @@ def update_trade_pnl(
         ),
     ).to_dataframe()
 
-    # If no open legs, nothing to process
+    # If no open legs, nothing further to do
     if legs_df.empty:
         logging.info("[%s] No open legs to process.", symbol)
         return
 
-    # ── 2) Validate that we have a usable underlying quote ───────────────────
+    # ── 2) Ensure underlying quote is available ─────────────────────────────
     if not quote or "last" not in quote:
         logging.warning("[%s] Missing underlying quote; skipping PnL update.", symbol)
         return
     underlying_price = float(quote["last"])
 
-    # Accumulate raw PnL (in points) per trade_id for roll‑up
+    # Accumulate raw PnL (in index‑points) per trade_id for later roll‑up
     trade_totals: Dict[str, float] = {}
 
-    # ── 3) Iterate each leg to compute, snapshot, and update PnL ───────────
+    # ── 3) Per‑leg PnL calculation, snapshot, and writeback ────────────────
     for _, leg in legs_df.iterrows():
         exp_date = leg.expiration_date
-        # lookup mid price for this expiry & leg
-        exp_map = (mid_maps or {}).get(exp_date, {})
-        current = exp_map.get((leg.strike, leg.leg_type), leg.entry_price)
 
-        # compute raw PnL in points: short = entry - current, long = current - entry
+        # 3a) Determine current mid price:
+        exp_map = (mid_maps or {}).get(exp_date, {})
+        if is_eod:
+            # At expiry, any missing mid implies OTM → price = 0.0
+            current = exp_map.get((leg.strike, leg.leg_type), 0.0)
+        else:
+            # Intraday: fallback to entry_price for missing mid
+            current = exp_map.get((leg.strike, leg.leg_type), leg.entry_price)
+
+        # 3b) Compute raw PnL in points: short = entry - current; long = current - entry
         raw_pnl = (
             leg.entry_price - current if leg.direction == "short" else (current - leg.entry_price)
         )
         raw_pnl = float(raw_pnl)
 
-        # determine status & exit_price if EOD
+        # 3c) Determine status & exit_price if EOD
         status = "closed" if is_eod else "open"
         exit_price = float(current) if is_eod else None
 
-        # ── 3a) insert a live snapshot row into LIVE_PNL ────────────────────
+        # 3d) Insert a live PnL snapshot
         CLIENT.insert_rows_json(
             LIVE_PNL,
             [
@@ -125,7 +132,7 @@ def update_trade_pnl(
             ],
         )
 
-        # ── 3b) update the trade_legs table with PnL, status (+ exit_price) ─
+        # 3e) Update the trade_legs table: pnl, status, (exit_price if closed)
         set_parts = [f"pnl = {raw_pnl}", f"status = '{status}'"]
         if is_eod:
             set_parts.append(f"exit_price = {exit_price}")
@@ -140,13 +147,13 @@ def update_trade_pnl(
             ),
         )
 
-        # accumulate for per‑trade roll‑up
+        # Accumulate per‑trade raw points for later roll‑up
         trade_totals[leg.trade_id] = trade_totals.get(leg.trade_id, 0.0) + raw_pnl
 
-    # ── 4) Roll up per‑trade and update trade_recommendations ──────────────
+    # ── 4) Roll up per‑trade PnL and update trade_recommendations ──────────
     for tid, raw_sum in trade_totals.items():
         if is_eod:
-            # At EOD: attempt to use precomputed max_profit/max_loss
+            # 4a) At EOD: try using precomputed max_profit/max_loss from analytics
             pl_sql = f"""
                 SELECT max_profit, max_loss
                 FROM `{PL_ANALYSIS}`
@@ -162,9 +169,10 @@ def update_trade_pnl(
             ).to_dataframe()
 
             if not pl_df.empty:
+                # Use analytic results
                 p_max = float(pl_df.at[0, "max_profit"])
                 p_min = float(pl_df.at[0, "max_loss"])
-                # fetch the two short strikes to decide payoff bracket
+                # Determine the two short strikes to choose correct payoff
                 info_sql = f"""
                     SELECT direction, leg_type, strike
                     FROM `{TRADE_LEGS}`
@@ -182,22 +190,24 @@ def update_trade_pnl(
                 sc = float(
                     info_df.query("direction=='short' and leg_type=='call'")["strike"].iloc[0]
                 )
+                # If underlying within short‐leg bracket → max_profit else max_loss
                 final_pnl = p_max if (sp <= underlying_price <= sc) else p_min
             else:
-                # fallback: raw_sum * contract size (100)
+                # fallback: sum(raw_pts) * 100
                 final_pnl = raw_sum * 100.0
 
+            # Prepare EOD expressions
             exit_price_expr = "entry_price + @pnl"
             exit_time_expr = "CURRENT_TIMESTAMP()"
             new_status = "closed"
         else:
-            # Intraday: status remains active, PnL = raw_sum * 100
+            # 4b) Intraday roll‑up: status stays active, pnl = raw_sum * 100
             final_pnl = raw_sum * 100.0
             new_status = "active"
             exit_price_expr = "exit_price"
             exit_time_expr = "exit_time"
 
-        # ── 4a) Update the trade_recommendations record for this trade ────
+        # 4c) Update the trade_recommendations row
         CLIENT.query(
             f"""
             UPDATE `{TRADE_RECS}`
