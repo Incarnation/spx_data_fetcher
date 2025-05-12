@@ -68,7 +68,10 @@ def update_trade_pnl(symbol: str, quote: dict, mid_maps: Dict[str, Dict[Tuple[fl
       AND r.symbol = @symbol
     """
     legs_df = CLIENT.query(
-        legs_sql, job_config=QueryJobConfig([ScalarQueryParameter("symbol", "STRING", symbol)])
+        legs_sql,
+        job_config=QueryJobConfig(
+            query_parameters=[ScalarQueryParameter("symbol", "STRING", symbol)]
+        ),
     ).to_dataframe()
 
     # If there are no open legs for this symbol, nothing more to do
@@ -162,14 +165,16 @@ def update_trade_pnl(symbol: str, quote: dict, mid_maps: Dict[str, Dict[Tuple[fl
         if is_eod:
             # 4a) At EOD, prefer precomputed analytics if present
             pl_df = CLIENT.query(
-                f"""
+                """
                 SELECT max_profit, max_loss
                 FROM `{PL_ANALYSIS}`
                 WHERE trade_id = @tid
                 ORDER BY timestamp DESC
                 LIMIT 1
                 """,
-                job_config=QueryJobConfig([ScalarQueryParameter("tid", "STRING", tid)]),
+                job_config=QueryJobConfig(
+                    query_parameters=[ScalarQueryParameter("tid", "STRING", tid)]
+                ),
             ).to_dataframe()
 
             if not pl_df.empty:
@@ -183,7 +188,9 @@ def update_trade_pnl(symbol: str, quote: dict, mid_maps: Dict[str, Dict[Tuple[fl
                     FROM `{TRADE_LEGS}`
                     WHERE trade_id = @tid
                     """,
-                    job_config=QueryJobConfig([ScalarQueryParameter("tid", "STRING", tid)]),
+                    job_config=QueryJobConfig(
+                        query_parameters=[ScalarQueryParameter("tid", "STRING", tid)]
+                    ),
                 ).to_dataframe()
                 sp = float(
                     info_df.query("direction=='short' and leg_type=='put'")["strike"].iloc[0]
