@@ -112,10 +112,10 @@ def start_scheduler():
     if scheduler.running:
         scheduler.remove_all_jobs()
 
-    # 1) Heartbeat job – logs every 10 min, 24/7
+    # 1) Heartbeat job – logs every 30 min, 24/7
     scheduler.add_job(
         debug_heartbeat,
-        CronTrigger(minute="0,10,20,30,40,50", timezone=NY_TZ),
+        CronTrigger(minute="*/30", timezone=NY_TZ),
     )
 
     # 2) Market‑data job: every 5 min Mon–Fri, 9:00–15:55 ET
