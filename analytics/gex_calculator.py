@@ -62,7 +62,7 @@ def calculate_and_store_gex():
           a.symbol,
           a.expiration_date,
           a.strike,
-          a.ts          AS timestamp,
+          l.ts          AS timestamp,
           a.underlying_price,
           SUM(
             CASE WHEN a.option_type = 'put' THEN -1 ELSE 1 END
@@ -72,14 +72,14 @@ def calculate_and_store_gex():
           ) AS net_gamma_exposure
         FROM `{GOOGLE_CLOUD_PROJECT}.options.option_chain_snapshot` a
         JOIN latest l
-          ON a.symbol          = l.symbol
+          ON a.symbol = l.symbol
          AND a.expiration_date = l.expiration_date
-         AND a.timestamp       = l.ts
+         AND a.timestamp = l.ts
         GROUP BY
-          a.symbol,
-          a.expiration_date,
-          a.strike,
-          a.ts,
+          a.symbol, 
+          a.expiration_date, 
+          a.strike, 
+          l.ts, 
           a.underlying_price
         """
 
