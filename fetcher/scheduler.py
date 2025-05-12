@@ -102,8 +102,8 @@ def scheduled_market_data():
 def start_scheduler():
     """
     Configure and start all scheduled jobs:
-      - Heartbeat (every 10 min)
-      - scheduled_market_data (every 5 min)
+      - Heartbeat (every 30 min)
+      - scheduled_market_data (every 10 min)
       - GEX & realized_vol analytics (every 15 min)
       - EOD batch at 16:00 ET (via scheduled_market_data + analytics)
       - 0DTE trade generator (at 10–13 ET sharp)

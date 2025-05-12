@@ -4,6 +4,7 @@
 # =====================
 import os
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd  # data manipulation
@@ -47,37 +48,32 @@ from utils.bq_queries import (
     get_gamma_exposure_surface_data,
     get_legs_data,
     get_live_pnl_data,
+    get_trade_ids,
     get_trade_pl_analysis,
     get_trade_recommendations,
 )
 
 # ==============================================================================
-# App Initialization
+# App Setup
 # ==============================================================================
 app = Dash(__name__, suppress_callback_exceptions=True)
 app.title = "📊 Multi‑Strategy Trading Dashboard"
-# Simple in-memory cache; consider Redis or Memcached for production
 cache = Cache(app.server, config={"CACHE_TYPE": "SimpleCache"})
 
 
 # ==============================================================================
-# Memoized Data Fetchers
-# These wrap BigQuery calls to avoid unnecessary repeats
+# Memoized Fetchers
 # ==============================================================================
 @cache.memoize(timeout=CACHE_TIMEOUT)
 def _expirations():
-    """
-    Retrieve and cache list of available expirations, newest first.
-    """
+    """Returns list of upcoming expirations (YYYY-MM-DD)."""
     return list(reversed(get_available_expirations()))
 
 
 @cache.memoize(timeout=CACHE_TIMEOUT)
 def _trade_ids():
-    """
-    Retrieve and cache all known trade IDs for wildcard MATCH callbacks.
-    """
-    return get_trade_recommendations(None)["trade_id"].tolist()
+    """Returns all known trade IDs for MATCH callbacks."""
+    return get_trade_ids()
 
 
 # ==============================================================================
@@ -126,15 +122,25 @@ def _render_tab(tab_value):
 # Gamma Surface Tab
 # --------------------------------
 def _gamma_surface_tab():
-    """
-    3D surface view of gamma exposure across strikes and expirations.
-    """
+    """3D surface with user-selectable expiry date range."""
     return html.Div(
         [
             html.H3("3D Gamma Exposure Surface"),
-            # Refresh button to re-run query
-            html.Button("Refresh", id="refresh-gamma-surface", n_clicks=0),
-            # Loading spinner while data fetches
+            html.Div(
+                [
+                    html.Label("Expiration Date Range:"),
+                    dcc.DatePickerRange(
+                        id="gamma-surface-date-range",
+                        min_date_allowed=date.today(),
+                        max_date_allowed=date.today() + timedelta(days=30),
+                        start_date=date.today(),
+                        end_date=date.today() + timedelta(days=30),
+                        display_format="YYYY-MM-DD",
+                    ),
+                    html.Button("Refresh", id="refresh-gamma-surface", n_clicks=0),
+                ],
+                style={"display": "flex", "gap": "1rem", "marginBottom": "1rem"},
+            ),
             dcc.Loading(dcc.Graph(id="gamma-surface-chart"), type="default"),
         ]
     )
@@ -143,16 +149,18 @@ def _gamma_surface_tab():
 @app.callback(
     Output("gamma-surface-chart", "figure"),
     Input("refresh-gamma-surface", "n_clicks"),
+    Input("gamma-surface-date-range", "start_date"),
+    Input("gamma-surface-date-range", "end_date"),
 )
-def _update_surface(n_clicks):
+def _update_surface(n_clicks, start_date, end_date):
     """
-    Fetch and return the Plotly figure for the gamma surface.
+    Refresh the 3D surface based on user-selected start/end expiration dates.
     """
     try:
-        return get_gamma_exposure_surface_data()
+        fig = get_gamma_exposure_surface_data(start_date=start_date, end_date=end_date)
+        return fig
     except Exception as e:
-        # Graceful error handling
-        return Figure(layout={"title": f"Error: {str(e)}"})
+        return Figure(layout={"title": f"Error loading surface: {e}"})
 
 
 # --------------------------------

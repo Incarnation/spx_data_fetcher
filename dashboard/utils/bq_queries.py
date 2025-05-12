@@ -15,7 +15,7 @@ from plotly.graph_objects import Figure, Surface
 from common.auth import get_gcp_credentials
 from common.config import GOOGLE_CLOUD_PROJECT
 
-TABLE_ID = f"{GOOGLE_CLOUD_PROJECT}.analytics.gamma_exposure"
+GEX_TABLE = f"{GOOGLE_CLOUD_PROJECT}.analytics.gamma_exposure"
 TRADE_RECOMMENDATIONS_TABLE = f"{GOOGLE_CLOUD_PROJECT}.analytics.trade_recommendations"
 LIVE_TRADE_PNL_TABLE = f"{GOOGLE_CLOUD_PROJECT}.analytics.live_trade_pnl"
 TRADE_PL_ANALYSIS_TABLE = f"{GOOGLE_CLOUD_PROJECT}.analytics.trade_pl_analysis"
@@ -35,7 +35,7 @@ def get_available_expirations() -> List[str]:
     query = f"""
     SELECT
       expiration_date
-    FROM `{TABLE_ID}`
+    FROM `{GEX_TABLE}`
     WHERE expiration_date >= CURRENT_DATE()
     GROUP BY expiration_date
     ORDER BY expiration_date DESC
@@ -193,114 +193,118 @@ def get_trade_pl_projections(trade_id: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def get_gamma_exposure_for_expiry(expiration_date: str) -> Tuple[pd.DataFrame, Optional[float]]:
+def get_gamma_exposure_for_expiry(
+    expiration_date: str,
+) -> Tuple[pd.DataFrame, Optional[float]]:
     """
-    Retrieves net gamma exposure by strike for a specific expiration date.
-    """
-    query = f"""
-        SELECT strike, net_gamma_exposure, underlying_price
-        FROM `{TABLE_ID}`
-        WHERE expiration_date = @expiration_date
-        AND timestamp = (
-            SELECT MAX(timestamp)
-            FROM `{TABLE_ID}`
-            WHERE expiration_date = @expiration_date
-        )
-    """
-    job_config = bigquery.QueryJobConfig(
-        query_parameters=[
-            bigquery.ScalarQueryParameter("expiration_date", "STRING", expiration_date)
-        ]
-    )
+    Fetches the net gamma exposure by strike for a single expiration date,
+    using the most recent snapshot in analytics.gamma_exposure.
 
+    Returns:
+      - DataFrame[strike, net_gamma_exposure]
+      - spot price (underlying_price) for reference line
+    """
+    sql = f"""
+    WITH latest AS (
+      SELECT
+        expiration_date,
+        MAX(timestamp) AS ts
+      FROM `{GEX_TABLE}`
+      WHERE expiration_date = @expiry
+      GROUP BY expiration_date
+    )
+    SELECT
+      ge.strike,
+      SUM(ge.net_gamma_exposure) AS net_gamma_exposure,
+      ANY_VALUE(ge.underlying_price) AS spot_price
+    FROM `{GEX_TABLE}` ge
+    JOIN latest l
+      ON ge.expiration_date = l.expiration_date
+     AND ge.timestamp       = l.ts
+    WHERE ge.expiration_date = @expiry
+    GROUP BY ge.strike
+    ORDER BY ge.strike
+    """
+    job_config = QueryJobConfig(
+        query_parameters=[ScalarQueryParameter("expiry", "DATE", expiration_date)]
+    )
     try:
-        df = CLIENT.query(query, job_config=job_config).to_dataframe()
+        df = CLIENT.query(sql, job_config=job_config).to_dataframe()
         if df.empty:
             return pd.DataFrame(), None
 
-        grouped = df.groupby("strike")["net_gamma_exposure"].sum().reset_index()
-        current_price = df["underlying_price"].dropna().median()
-
-        return grouped, current_price
+        # Extract spot price (same for all rows)
+        spot = df["spot_price"].iloc[0]
+        return df[["strike", "net_gamma_exposure"]], spot
     except Exception as e:
-        logging.error(f"Error fetching gamma exposure for expiry {expiration_date}: {e}")
+        logging.error(f"Error fetching GEX for expiry {expiration_date}: {e}")
         return pd.DataFrame(), None
 
 
-def get_gamma_exposure_surface_data(
-    start_date: Optional[str] = None, end_date: Optional[str] = None
-) -> Figure:
+def get_gamma_exposure_surface_data(start_date: Optional[str], end_date: Optional[str]) -> Figure:
     """
-    Returns a 3D surface plot of Strike × Expiry × Gamma Exposure.
-
-    Args:
-        start_date (str, optional): Start date in YYYY-MM-DD format.
-        end_date (str, optional): End date in YYYY-MM-DD format.
-
-    Returns:
-        Figure: Plotly 3D Surface plot.
+    Returns a Plotly 3D surface of GEX across strikes (x-axis) and expirations (y-axis),
+    filtering by expiration_date BETWEEN start_date AND end_date (inclusive).
     """
-    query = f"""
-        SELECT expiration_date, strike, SUM(net_gamma_exposure) AS gex
-        FROM `{TABLE_ID}`
-        WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY)
+    sql = f"""
+    WITH latest_per_expiry AS (
+      SELECT expiration_date, MAX(timestamp) AS ts
+      FROM `{GEX_TABLE}`
+      WHERE expiration_date BETWEEN @start_date AND @end_date
+      GROUP BY expiration_date
+    )
+    SELECT
+      ge.expiration_date,
+      ge.strike,
+      SUM(ge.net_gamma_exposure) AS gex
+    FROM `{GEX_TABLE}` ge
+    JOIN latest_per_expiry lpe
+      ON ge.expiration_date = lpe.expiration_date
+     AND ge.timestamp       = lpe.ts
+    GROUP BY ge.expiration_date, ge.strike
+    ORDER BY ge.expiration_date, ge.strike
     """
-
-    if start_date:
-        query += f" AND expiration_date >= '{start_date}'"
-    if end_date:
-        query += f" AND expiration_date <= '{end_date}'"
-
-    query += " GROUP BY expiration_date, strike"
-
+    job_config = QueryJobConfig(
+        query_parameters=[
+            ScalarQueryParameter("start_date", "DATE", start_date),
+            ScalarQueryParameter("end_date", "DATE", end_date),
+        ]
+    )
     try:
-        df = CLIENT.query(query).to_dataframe()
+        df = CLIENT.query(sql, job_config=job_config).to_dataframe()
         if df.empty:
-            return Figure(layout={"title": "No data for 3D Gamma Exposure surface."})
+            return Figure(layout={"title": "No data for selected date range."})
 
+        # Pivot to grid for Surface plot
         df["expiration_date"] = pd.to_datetime(df["expiration_date"])
         pivot = df.pivot_table(
-            index="strike", columns="expiration_date", values="gex", fill_value=0
+            index="strike",
+            columns="expiration_date",
+            values="gex",
+            fill_value=0,
         )
+        x = pivot.index.values
+        y = [d.strftime("%Y-%m-%d") for d in pivot.columns]
+        z = np.clip(pivot.values, -1e8, 1e8)
 
-        z_raw = pivot.values
-        z_clipped = np.clip(z_raw, -1e8, 1e8)
-        x = pivot.index
-        y = pivot.columns.strftime("%Y-%m-%d")
-
-        fig = Figure(
-            data=[
-                Surface(
-                    z=z_clipped,
-                    x=x,
-                    y=y,
-                    colorscale="RdBu",
-                    reversescale=True,
-                    showscale=True,
-                    opacity=0.95,
-                    lighting=dict(ambient=0.6, diffuse=0.8),
-                    lightposition=dict(x=0, y=0, z=300),
-                )
-            ]
-        )
-
+        # Build Plotly Surface
+        surface = Surface(z=z, x=x, y=y, showscale=True, opacity=0.9)
+        fig = Figure(data=[surface])
         fig.update_layout(
             title="3D Gamma Exposure Surface",
-            scene=dict(
-                xaxis_title="Strike Price",
-                yaxis_title="Expiration Date",
-                zaxis_title="Net Gamma Exposure",
-            ),
-            margin=dict(l=0, r=0, b=0, t=50),
+            scene={
+                "xaxis_title": "Strike",
+                "yaxis_title": "Expiration Date",
+                "zaxis_title": "GEX",
+            },
+            margin={"l": 0, "r": 0, "b": 0, "t": 50},
             height=600,
-            template="plotly_white",
         )
-
         return fig
 
     except Exception as e:
-        logging.error(f"Error generating 3D Gamma Exposure surface plot: {e}")
-        return Figure(layout={"title": "Error generating 3D Gamma Exposure surface."})
+        logging.error(f"Error generating GEX surface: {e}")
+        return Figure(layout={"title": "Error generating surface."})
 
 
 def get_trade_ids() -> List[str]:
