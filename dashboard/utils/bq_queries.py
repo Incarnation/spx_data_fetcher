@@ -293,9 +293,9 @@ def get_gamma_exposure_surface_data(start_date: Optional[str], end_date: Optiona
         fig.update_layout(
             title="3D Gamma Exposure Surface",
             scene={
-                "xaxis_title": "Strike",
+                "xaxis_title": "Strike Price",
                 "yaxis_title": "Expiration Date",
-                "zaxis_title": "GEX",
+                "zaxis_title": "Net Gamma Exposure",
             },
             margin={"l": 0, "r": 0, "b": 0, "t": 50},
             height=600,
