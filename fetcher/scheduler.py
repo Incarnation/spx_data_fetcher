@@ -93,7 +93,9 @@ def scheduled_market_data():
                 upload_to_bigquery(legs, now_utc, exp, quote)
 
                 # 3e) Build a lookup of mid_prices for PnL computation
-                per_symbol_mid[exp] = {(leg.strike, leg.option_type): leg.mid_price for leg in legs}
+                per_symbol_mid[exp] = {
+                    (leg["strike"], leg["option_type"]): leg["mid_price"] for leg in legs
+                }
 
             # 3f) Invoke the PnL monitor once per symbol, passing mid_maps
             update_trade_pnl(symbol=sym, quote=quote, mid_maps=per_symbol_mid)

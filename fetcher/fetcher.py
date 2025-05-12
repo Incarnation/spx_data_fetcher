@@ -57,8 +57,14 @@ def fetch_option_chain(symbol: str, expiration: str, quote: dict):
         resp.raise_for_status()
         options = resp.json().get("options", {}).get("option", [])
 
-        # Filter 200 strikes closest to current price (±100)
-        options = sorted(options, key=lambda x: abs(x.get("strike", 0) - current_price))
+        # Compute mid_price for each option leg
+        for opt in options:
+            bid = opt.get("bid") or 0.0
+            ask = opt.get("ask") or 0.0
+            opt["mid_price"] = (bid + ask) / 2
+
+        # Filter 200 strikes closest to current price
+        options = sorted(options, key=lambda x: abs(x.get("strike", 0.0) - current_price))
         return options[:200]
 
     except Exception as e:
