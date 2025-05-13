@@ -45,15 +45,14 @@ def update_trade_pnl(symbol: str, quote: dict, mid_maps: Dict[str, Dict[Tuple[fl
       - Runs once at EOD (16:00–16:04 ET); does final close (“closed” status),
         writes exit_price & exit_time, and uses analytical PL if available.
     """
-    # ── 0) Timestamps & EOD detection ────────────────────────────────────────
+    # ── 0) Get timestamps & detect EOD window. ───────────────────────────────
     now_utc = datetime.now(timezone.utc)
     now_et = now_utc.astimezone(NY_TZ)
-    # EOD window = any time from 16:00:00–16:04:59 ET
     is_eod = now_et.hour == 16 and now_et.minute < 5
-    now_iso = now_utc.isoformat()  # BigQuery TIMESTAMP literal
+    now_iso = now_utc.isoformat()  # for TIMESTAMP params
 
-    # ── 1) Fetch all open legs + their trade metadata ───────────────────────
-    legs_sql = """
+    # ── 1) Fetch all currently open legs for this symbol ─────────────────────
+    legs_sql = f"""
     SELECT
       t.trade_id,
       t.leg_id,
@@ -74,34 +73,33 @@ def update_trade_pnl(symbol: str, quote: dict, mid_maps: Dict[str, Dict[Tuple[fl
         ),
     ).to_dataframe()
 
-    # If there are no open legs for this symbol, nothing more to do
+    # nothing to do if no open legs
     if legs_df.empty:
         logging.info("[%s] No open legs to process.", symbol)
         return
 
-    # ── 2) Ensure we have a valid underlying quote ───────────────────────────
+    # ── 2) Validate underlying quote ───────────────────────────────────────
     if not quote or "last" not in quote:
         logging.warning("[%s] Missing underlying quote; skipping PnL update.", symbol)
         return
-    underlying_price = float(quote["last"])  # index‐points
+    underlying_price = float(quote["last"])
 
-    # Accumulator for per‐trade raw PnL (in points)
+    # prepare accumulator for per-trade PnL in index points
     trade_totals: Dict[str, float] = {}
 
-    # ── 3) Per‐leg PnL calculation, snapshot, and writeback ─────────────────
+    # ── 3) Loop each leg: compute PnL, write snapshot, update leg table ────
     for _, leg in legs_df.iterrows():
         exp_date = leg.expiration_date
-
-        # 3a) Determine current mid price or fallback
-        per_exp_map = mid_maps.get(exp_date, {})
+        # a) choose current mid price or fallback
+        per_map = mid_maps.get(exp_date, {})
         if is_eod:
-            # At EOD: any missing mid_price → leg is OTM → price=0.0
-            current_price = per_exp_map.get((leg.strike, leg.leg_type), 0.0)
+            # at EOD, any missing mid means OTM → price = 0.0
+            current_price = per_map.get((leg.strike, leg.leg_type), 0.0)
         else:
-            # Intraday: missing mid → assume flat since entry → price = entry_price
-            current_price = per_exp_map.get((leg.strike, leg.leg_type), leg.entry_price)
+            # intraday, missing mid => assume price = entry
+            current_price = per_map.get((leg.strike, leg.leg_type), leg.entry_price)
 
-        # 3b) Compute raw PnL in index‐points
+        # b) raw PnL in index points
         #   short position: entry_price - current_price
         #   long  position: current_price - entry_price
         raw_pts = (
@@ -111,7 +109,7 @@ def update_trade_pnl(symbol: str, quote: dict, mid_maps: Dict[str, Dict[Tuple[fl
         )
         raw_pts = float(raw_pts)
 
-        # 3c) Insert a live PnL snapshot row
+        # c) write a snapshot to live_trade_pnl
         CLIENT.insert_rows_json(
             LIVE_PNL,
             [
@@ -130,24 +128,16 @@ def update_trade_pnl(symbol: str, quote: dict, mid_maps: Dict[str, Dict[Tuple[fl
             ],
         )
 
-        # 3d) Update the trade_legs table with fresh PnL & status
+        # d) update this leg’s row in trade_legs
         leg_params = [
             ScalarQueryParameter("leg_id", "STRING", leg.leg_id),
             ScalarQueryParameter("pnl", "FLOAT", raw_pts),
             ScalarQueryParameter("cp", "FLOAT", current_price),
             ScalarQueryParameter("ts", "TIMESTAMP", now_iso),
         ]
-        # Build SET clauses
-        set_clauses = [
-            "pnl = @pnl",
-            f"status = '{'closed' if is_eod else 'open'}'",
-        ]
+        set_clauses = ["pnl = @pnl", f"status = '{'closed' if is_eod else 'open'}'"]
         if is_eod:
-            # Record final closing price & time
-            set_clauses += [
-                "exit_price = @cp",
-                "exit_time  = @ts",
-            ]
+            set_clauses += ["exit_price = @cp", "exit_time = @ts"]
         CLIENT.query(
             f"""
             UPDATE `{TRADE_LEGS}`
@@ -157,15 +147,15 @@ def update_trade_pnl(symbol: str, quote: dict, mid_maps: Dict[str, Dict[Tuple[fl
             job_config=QueryJobConfig(query_parameters=leg_params),
         )
 
-        # 3e) Accumulate raw points for this leg’s trade
+        # e) accumulate for trade-level roll-up
         trade_totals[leg.trade_id] = trade_totals.get(leg.trade_id, 0.0) + raw_pts
 
-    # ── 4) Roll up per‐trade PnL and update recommendations ──────────────────
+    # ── 4) Roll up per-trade and update trade_recommendations ────────────────
     for tid, sum_pts in trade_totals.items():
         if is_eod:
-            # 4a) At EOD, prefer precomputed analytics if present
+            # try to fetch analytic bounds for final payoff
             pl_df = CLIENT.query(
-                """
+                f"""
                 SELECT max_profit, max_loss
                 FROM `{PL_ANALYSIS}`
                 WHERE trade_id = @tid
@@ -178,12 +168,11 @@ def update_trade_pnl(symbol: str, quote: dict, mid_maps: Dict[str, Dict[Tuple[fl
             ).to_dataframe()
 
             if not pl_df.empty:
-                # Use the analytic band to decide final payoff
                 p_max = float(pl_df.at[0, "max_profit"])
                 p_min = float(pl_df.at[0, "max_loss"])
-                # Fetch the two short strikes to bracket the underlying
+                # fetch the two short strikes to decide payoff region
                 info_df = CLIENT.query(
-                    """
+                    f"""
                     SELECT direction, leg_type, strike
                     FROM `{TRADE_LEGS}`
                     WHERE trade_id = @tid
@@ -200,23 +189,26 @@ def update_trade_pnl(symbol: str, quote: dict, mid_maps: Dict[str, Dict[Tuple[fl
                 )
                 final_pnl = p_max if (sp <= underlying_price <= sc) else p_min
             else:
-                # Fallback: sum of raw points * 100 contracts
                 final_pnl = sum_pts * 100.0
 
             new_status = "closed"
         else:
-            # 4b) Intraday: keep marked active, scale to contract size
+            # intraday: position stays active
             final_pnl = sum_pts * 100.0
             new_status = "active"
 
-        # 4c) Update the trade_recommendations row
+        # f) update trade_recommendations with rolled-up PnL
         rec_params = [
             ScalarQueryParameter("tid", "STRING", tid),
             ScalarQueryParameter("pnl", "FLOAT", final_pnl),
             ScalarQueryParameter("status", "STRING", new_status),
         ]
-        exit_price_expr = "@cp" if is_eod else "exit_price"
-        exit_time_expr = "@ts" if is_eod else "exit_time"
+        # if EOD, we need @cp and @ts here too
+        if is_eod:
+            rec_params += [
+                ScalarQueryParameter("cp", "FLOAT", current_price),
+                ScalarQueryParameter("ts", "TIMESTAMP", now_iso),
+            ]
 
         CLIENT.query(
             f"""
@@ -224,12 +216,12 @@ def update_trade_pnl(symbol: str, quote: dict, mid_maps: Dict[str, Dict[Tuple[fl
             SET
               pnl        = @pnl,
               status     = @status,
-              exit_price = {exit_price_expr},
-              exit_time  = {exit_time_expr}
+              exit_price = {'@cp' if is_eod else 'exit_price'},
+              exit_time  = {'@ts' if is_eod else 'exit_time'}
             WHERE trade_id = @tid
               AND status != 'closed'
             """,
-            job_config=QueryJobConfig(query_parameters=leg_params + rec_params),
+            job_config=QueryJobConfig(query_parameters=rec_params),
         )
 
     logging.info("[%s] PnL monitor complete (EOD=%s)", symbol, is_eod)
