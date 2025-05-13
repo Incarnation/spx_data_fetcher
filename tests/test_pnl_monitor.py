@@ -6,6 +6,13 @@ import pytest
 
 import trade.pnl_monitor as pnl_monitor
 
+# =====================
+# tests/test_pnl_monitor.py
+# Unit tests for the PnL monitor
+# export PYTHONPATH=$(pwd)
+# running with pytest pytest tests/test_pnl_monitor.py -v
+# =====================
+
 
 class DummyDateTimeFactory:
     def __init__(self, fixed):
@@ -354,3 +361,237 @@ def test_iron_condor_intraday_rollup(monkeypatch, dummy_client, iron_condor_df):
     total_pts = sum(expected)
     assert params["pnl"] == pytest.approx(total_pts * 100)
     assert params["status"] == "active"
+
+
+def test_trade_legs_update_intraday_params(monkeypatch, dummy_client, sample_leg_df):
+    """
+    Intraday: ensure the UPDATE on trade_legs uses status='open',
+    includes 'pnl = @pnl', and that parameters include leg_id, pnl, cp, ts.
+    """
+    # Stub the legs‑fetch to return one open leg
+    dummy_client.query.return_value.to_dataframe.return_value = sample_leg_df
+
+    # Freeze time to intraday (12:00 UTC -> 08:00 ET)
+    fixed = datetime(2025, 5, 10, 12, 0, tzinfo=timezone.utc)
+
+    class DT(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+
+    monkeypatch.setattr(pnl_monitor, "datetime", DT)
+
+    # Provide quote and mid_map so current_price != entry_price
+    quote = {"last": 110.0}
+    mid_maps = {sample_leg_df.expiration_date.iloc[0]: {(100.0, "call"): 7.0}}
+
+    # Run the PnL update
+    pnl_monitor.update_trade_pnl("SPX", quote=quote, mid_maps=mid_maps)
+
+    # Find the trade_legs UPDATE call
+    update_calls = [
+        (args, kw)
+        for args, kw in dummy_client.query.call_args_list
+        if args and "UPDATE `" in args[0] and pnl_monitor.TRADE_LEGS in args[0]
+    ]
+    assert update_calls, "Expected an UPDATE on trade_legs"
+    args, kwargs = update_calls[0]
+    sql_text = args[0]
+
+    # a) SQL must set pnl and status='open'
+    assert "pnl = @pnl" in sql_text, "Intraday UPDATE did not set pnl = @pnl"
+    assert "status = 'open'" in sql_text, "Intraday UPDATE did not set status='open'"
+
+    # b) Parameters must include leg_id, pnl, cp, ts (ts now a datetime)
+    params = {p.name: p.value for p in kwargs["job_config"].query_parameters}
+    assert params["leg_id"] == sample_leg_df.leg_id.iloc[0]
+    assert params["pnl"] == pytest.approx(2.0)  # (7 - 5)
+    assert params["cp"] == pytest.approx(7.0)
+    assert "ts" in params and isinstance(params["ts"], datetime)
+
+
+def test_trade_legs_update_eod_params(monkeypatch, dummy_client, sample_leg_df):
+    """
+    EOD: at exactly 16:00 ET, UPDATE on trade_legs should use status='closed',
+    include exit_price=@cp & exit_time=@ts, and parameters include cp and ts.
+    """
+    # Stub sequence: fetch legs, update legs, pl_analysis, info_df, update recs
+    pl_df = pd.DataFrame([{"max_profit": 100.0, "max_loss": -50.0}])
+    info_df = pd.DataFrame(
+        [
+            {"direction": "short", "leg_type": "put", "strike": 95.0},
+            {"direction": "short", "leg_type": "call", "strike": 105.0},
+        ]
+    )
+    dummy_client.query.side_effect = [
+        MagicMock(to_dataframe=MagicMock(return_value=sample_leg_df)),  # fetch legs
+        MagicMock(),  # update legs
+        MagicMock(to_dataframe=MagicMock(return_value=pl_df)),  # pl_analysis
+        MagicMock(to_dataframe=MagicMock(return_value=info_df)),  # strike info
+        MagicMock(),  # update recs
+    ]
+
+    # Freeze time to 20:00 UTC => 16:00 ET
+    fixed = datetime(2025, 5, 10, 20, 0, tzinfo=timezone.utc)
+
+    class DT(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+
+    monkeypatch.setattr(pnl_monitor, "datetime", DT)
+
+    pnl_monitor.update_trade_pnl("SPX", quote={"last": 100.0}, mid_maps={})
+
+    # The second call in side_effect is the trade_legs UPDATE
+    args, kwargs = dummy_client.query.call_args_list[1]
+    sql_text = args[0]
+    assert pnl_monitor.TRADE_LEGS in sql_text, "EOD UPDATE did not target TRADE_LEGS"
+    assert "exit_price = @cp" in sql_text, "EOD UPDATE missing exit_price = @cp"
+    assert "exit_time = @ts" in sql_text, "EOD UPDATE missing exit_time = @ts"
+    assert "status = 'closed'" in sql_text, "EOD UPDATE missing status='closed'"
+
+    params = {p.name: p.value for p in kwargs["job_config"].query_parameters}
+    assert params["cp"] == pytest.approx(0.0)  # no mid => fallback 0.0
+    assert "ts" in params
+
+
+def test_live_snapshot_full_payload(monkeypatch, dummy_client, sample_leg_df):
+    """
+    Intraday snapshot: verify insert_rows_json payload has keys
+    'current_price', 'underlying_price', and 'price_type' == 'mid'.
+    """
+    dummy_client.query.return_value.to_dataframe.return_value = sample_leg_df
+
+    # Freeze intraday
+    fixed = datetime(2025, 5, 10, 12, 0, tzinfo=timezone.utc)
+
+    class DT(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+
+    monkeypatch.setattr(pnl_monitor, "datetime", DT)
+
+    quote = {"last": 110.0}
+    mid_maps = {sample_leg_df.expiration_date.iloc[0]: {(100.0, "call"): 7.0}}
+    pnl_monitor.update_trade_pnl("SPX", quote=quote, mid_maps=mid_maps)
+
+    # inspect the single insert_rows_json call
+    table, rows = dummy_client.insert_rows_json.call_args[0]
+    payload = rows[0]
+    assert payload["current_price"] == pytest.approx(7.0)
+    assert payload["underlying_price"] == pytest.approx(110.0)
+    assert payload["price_type"] == "mid"
+
+
+def test_multiple_trade_rollup(monkeypatch, dummy_client):
+    """
+    Two different trade_ids => two separate rec-updates, each with correct PnL.
+    """
+    # Prepare two legs for two trades
+    df = pd.DataFrame(
+        [
+            {
+                "trade_id": "T1",
+                "leg_id": "L1",
+                "strike": 100.0,
+                "leg_type": "call",
+                "direction": "long",
+                "entry_price": 5.0,
+                "expiration_date": pd.Timestamp("2025-05-15").date(),
+            },
+            {
+                "trade_id": "T2",
+                "leg_id": "L2",
+                "strike": 50.0,
+                "leg_type": "put",
+                "direction": "long",
+                "entry_price": 2.0,
+                "expiration_date": pd.Timestamp("2025-05-15").date(),
+            },
+        ]
+    )
+    dummy_client.query.return_value.to_dataframe.return_value = df
+
+    # Freeze intraday
+    fixed = datetime(2025, 5, 10, 12, 0, tzinfo=timezone.utc)
+
+    class DT(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+
+    monkeypatch.setattr(pnl_monitor, "datetime", DT)
+
+    # mid_maps with +1 pt for each leg
+    mid_maps = {
+        pd.Timestamp("2025-05-15").date(): {
+            (100.0, "call"): 6.0,  # +1 => $100
+            (50.0, "put"): 3.0,  # +1 => $100
+        }
+    }
+    pnl_monitor.update_trade_pnl("SPX", quote={"last": 110.0}, mid_maps=mid_maps)
+
+    # Filter only UPDATE calls on trade_recommendations
+    rec_calls = [
+        (args, kw)
+        for args, kw in dummy_client.query.call_args_list
+        if args and "UPDATE" in args[0] and pnl_monitor.TRADE_RECS in args[0]
+    ]
+    assert len(rec_calls) == 2, f"Expected 2 rec-updates, got {len(rec_calls)}"
+
+    pnls = [
+        {p.name: p.value for p in kw["job_config"].query_parameters}["pnl"]
+        for args, kw in rec_calls
+    ]
+    assert all(p == pytest.approx(100.0) for p in pnls)
+
+
+def test_insert_rows_exception_propagation(monkeypatch, dummy_client, sample_leg_df):
+    """
+    If insert_rows_json fails, the exception should bubble up.
+    """
+    dummy_client.query.return_value.to_dataframe.return_value = sample_leg_df
+    dummy_client.insert_rows_json.side_effect = ValueError("DB error")
+
+    fixed = datetime(2025, 5, 10, 12, 0, tzinfo=timezone.utc)
+
+    class DT(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+
+    monkeypatch.setattr(pnl_monitor, "datetime", DT)
+
+    with pytest.raises(ValueError, match="DB error"):
+        pnl_monitor.update_trade_pnl("SPX", quote={"last": 100}, mid_maps={})
+
+
+def test_eod_exact_1600_boundary(monkeypatch, dummy_client, sample_leg_df):
+    """
+    Exactly 16:00:00 ET should be treated as EOD (snapshot status closed).
+    """
+    # Stub legs + pl_analysis empty so fallback taken
+    dummy_client.query.side_effect = [
+        MagicMock(to_dataframe=MagicMock(return_value=sample_leg_df)),  # legs
+        MagicMock(),  # update legs
+        MagicMock(to_dataframe=MagicMock(return_value=pd.DataFrame())),  # empty pl_analysis
+        MagicMock(),  # update recs
+    ]
+
+    # Freeze to 20:00 UTC = 16:00 ET
+    fixed = datetime(2025, 5, 10, 20, 0, tzinfo=timezone.utc)
+
+    class DT(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+
+    monkeypatch.setattr(pnl_monitor, "datetime", DT)
+
+    pnl_monitor.update_trade_pnl("SPX", quote={"last": 100.0}, mid_maps={})
+
+    # Snapshot from insert_rows_json should have status 'closed'
+    _, rows = dummy_client.insert_rows_json.call_args[0]
+    assert rows[0]["status"] == "closed", "At EOD boundary, snapshot status should be 'closed'"
