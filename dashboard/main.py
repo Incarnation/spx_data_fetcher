@@ -2,9 +2,10 @@
 # =====================
 # Multi‑Strategy Dashboard with unified PnL/Legs table, toggleable details.
 # =====================
+import logging
 import os
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd  # data manipulation
@@ -44,8 +45,10 @@ if not (os.getenv("RENDER") or os.getenv("RAILWAY_ENVIRONMENT")):
 # ==============================================================================
 from utils.bq_queries import (
     get_available_expirations,
+    get_gamma_exposure_at_time,
     get_gamma_exposure_for_expiry,
     get_gamma_exposure_surface_data,
+    get_historical_expirations,
     get_legs_data,
     get_live_pnl_data,
     get_trade_ids,
@@ -76,25 +79,29 @@ def _trade_ids():
     return get_trade_ids()
 
 
+@cache.memoize(timeout=CACHE_TIMEOUT)
+def _hist_expirations():
+    """Returns list of past expirations (YYYY‑MM‑DD)."""
+    return get_historical_expirations(limit=100)
+
+
 # ==============================================================================
 # App Layout
 # ==============================================================================
 app.layout = html.Div(
     style={"fontFamily": "Arial", "maxWidth": "1200px", "margin": "auto", "padding": "20px"},
     children=[
-        # Title
         html.H1("📈 Multi‑Strategy Trading Dashboard", style={"textAlign": "center"}),
-        # Tab selector
         dcc.Tabs(
             id="tabs",
             value="tab-gamma-surface",
             children=[
                 dcc.Tab(label="Gamma Exposure Surface", value="tab-gamma-surface"),
                 dcc.Tab(label="Gamma Exposure Analysis", value="tab-gamma"),
+                dcc.Tab(label="Intraday Gamma Exposure", value="tab-gamma-intraday"),
                 dcc.Tab(label="Trade Recommendations", value="tab-trades"),
             ],
         ),
-        # Content will be populated via callback
         html.Div(id="tabs-content"),
     ],
 )
@@ -104,18 +111,16 @@ app.layout = html.Div(
 # Tab Content Renderers
 # ==============================================================================
 @app.callback(Output("tabs-content", "children"), Input("tabs", "value"))
-def _render_tab(tab_value):
-    """
-    Display content for the selected tab.
-    """
-    if tab_value == "tab-gamma-surface":
+def _render_tab(tab):
+    if tab == "tab-gamma-surface":
         return _gamma_surface_tab()
-    elif tab_value == "tab-gamma":
+    if tab == "tab-gamma":
         return _gamma_analysis_tab()
-    elif tab_value == "tab-trades":
+    if tab == "tab-gamma-intraday":
+        return _gamma_intraday_tab()
+    if tab == "tab-trades":
         return _trades_tab()
-    # Fallback in case of unexpected tab
-    return html.Div(f"Unknown tab '{tab_value}' selected.")
+    return html.Div(f"Unknown tab: {tab}")
 
 
 # --------------------------------
@@ -403,6 +408,129 @@ def _toggle_details(n_clicks):
     ]
 
     return {"display": "block"}, details, btn_label
+
+
+# --------------------------------
+# Intraday Gamma Exposure Tab
+# --------------------------------
+def _gamma_intraday_tab():
+    return html.Div(
+        [
+            html.H3("Intraday Gamma Exposure (±5 min)"),
+            html.Div(
+                [
+                    # Expiry selector
+                    html.Label("Expiration Date:"),
+                    dcc.Dropdown(
+                        id="intraday-expiry-dropdown",
+                        options=[{"label": d, "value": d} for d in _hist_expirations()],
+                        placeholder="Select a past expiration",
+                        style={"width": "200px", "marginRight": "1rem"},
+                    ),
+                    # Single EST time input
+                    html.Label("Time (EST):"),
+                    dcc.Input(
+                        id="intraday-time-input",
+                        type="text",
+                        placeholder="2025-05-06 11:30:00",
+                        style={"width": "200px", "marginRight": "1rem"},
+                    ),
+                    # Refresh button
+                    html.Button("Refresh", id="refresh-intraday", n_clicks=0),
+                ],
+                style={
+                    "display": "flex",
+                    "alignItems": "center",
+                    "gap": "1rem",
+                    "marginBottom": "1rem",
+                },
+            ),
+            # Graph placeholder
+            dcc.Loading(dcc.Graph(id="intraday-gamma-chart"), type="default"),
+        ]
+    )
+
+
+@app.callback(
+    Output("intraday-gamma-chart", "figure"),
+    Input("refresh-intraday", "n_clicks"),
+    Input("intraday-expiry-dropdown", "value"),
+    Input("intraday-time-input", "value"),
+)
+def _update_intraday_chart(n_clicks, expiry, time_str):
+    """
+    When the user clicks "Refresh":
+      1) Parse the EST time string
+      2) Convert to UTC TIMESTAMP literal
+      3) Query get_gamma_exposure_at_time() ±5 min
+      4) Aggregate net GEX by strike
+      5) Draw a single Bar trace, red bars for negative GEX
+    """
+    # 1) Validate inputs: need both expiry and a time
+    if not expiry or not time_str:
+        return Figure(layout={"title": "Select expiration and time (EST)"})
+
+    try:
+        # 2) Parse input EST ↦ aware datetime
+        dt_est = EAST_TZ.localize(datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S"))
+        # 3) Convert EST ↦ UTC
+        dt_utc = dt_est.astimezone(pytz.utc)
+        # 4) Format as BigQuery TIMESTAMP string
+        ts_utc = dt_utc.strftime("%Y-%m-%d %H:%M:%S")
+
+        # 5) Fetch GEX within ±5 minutes
+        df = get_gamma_exposure_at_time(
+            snapshot_time=ts_utc,
+            expiration_date=expiry,
+            window_minutes=10,  # total window
+        )
+
+        # 6) If no data, show friendly message
+        if df.empty:
+            return Figure(layout={"title": f"No data around {time_str} EST"})
+
+        # 7) Aggregate (in case multiple rows per strike)
+        df_net = (
+            df.groupby("strike", as_index=False)["net_gamma_exposure"].sum().sort_values("strike")
+        )
+
+        # 8) Build the bar colors: red if negative, else blue
+        bar_colors = ["red" if g < 0 else "steelblue" for g in df_net["net_gamma_exposure"]]
+
+        # 9) Create the bar chart
+        fig = Figure()
+        fig.add_trace(
+            Bar(
+                x=df_net["strike"],
+                y=df_net["net_gamma_exposure"],
+                name="Net GEX",
+                marker=dict(color=bar_colors),
+            )
+        )
+
+        # 10) Draw a horizontal zero line for reference
+        fig.add_shape(
+            type="line",
+            x0=df_net.strike.min(),
+            x1=df_net.strike.max(),
+            y0=0,
+            y1=0,
+            line=dict(color="gray", dash="dot"),
+        )
+
+        # 11) Final layout touches
+        fig.update_layout(
+            title=(f"Intraday Net GEX on {expiry} at {dt_est.strftime('%H:%M')} ET (±5 min)"),
+            xaxis_title="Strike",
+            yaxis_title="Net Gamma Exposure",
+            template="plotly_white",
+            height=500,
+        )
+        return fig
+
+    except Exception as e:
+        logging.error(f"Error in intraday chart callback: {e}")
+        return Figure(layout={"title": f"Error: {e}"})
 
 
 # ==============================================================================

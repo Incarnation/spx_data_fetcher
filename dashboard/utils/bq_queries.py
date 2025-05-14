@@ -54,6 +54,25 @@ def get_available_expirations() -> List[str]:
         return []
 
 
+def get_historical_expirations(limit: int = 30) -> List[str]:
+    """
+    Returns a list of the most recent past expiration dates (strictly before today),
+    formatted YYYY‑MM‑DD, up to `limit` entries.
+    """
+    sql = f"""
+    SELECT DISTINCT expiration_date
+    FROM `{GEX_TABLE}`
+    WHERE expiration_date < CURRENT_DATE()
+    ORDER BY expiration_date DESC
+    LIMIT @limit
+    """
+    job_conf = QueryJobConfig(query_parameters=[ScalarQueryParameter("limit", "INT64", limit)])
+    df = CLIENT.query(sql, job_config=job_conf).to_dataframe()
+    # format as strings
+    df["expiration_date"] = pd.to_datetime(df["expiration_date"], errors="coerce")
+    return df["expiration_date"].dt.strftime("%Y-%m-%d").tolist()
+
+
 def get_trade_recommendations(status: str) -> pd.DataFrame:
     """
     Fetch trade recommendations based on status ('pending', 'active', 'closed').
@@ -239,6 +258,47 @@ def get_gamma_exposure_for_expiry(
     except Exception as e:
         logging.error(f"Error fetching GEX for expiry {expiration_date}: {e}")
         return pd.DataFrame(), None
+
+
+def get_gamma_exposure_at_time(
+    snapshot_time: str,
+    expiration_date: Optional[str] = None,
+    window_minutes: int = 10,
+) -> pd.DataFrame:
+    """
+    Fetch net_gamma_exposure by strike for a small time‐window around snapshot_time.
+    - snapshot_time: 'YYYY-MM-DD HH:MM:SS' in UTC
+    - expiration_date: optional 'YYYY-MM-DD' to filter one expiry
+    - window_minutes: total minutes of tolerance around snapshot_time
+
+    Returns:
+      DataFrame[strike, net_gamma_exposure] for any points within +/- window_minutes/2
+    """
+    half = window_minutes // 2
+
+    where = [
+        # timestamp within ±half minutes of the requested UTC time
+        f"timestamp BETWEEN "
+        f"TIMESTAMP_SUB(TIMESTAMP(@ts), INTERVAL {half} MINUTE) "
+        f"AND TIMESTAMP_ADD(TIMESTAMP(@ts), INTERVAL {half} MINUTE)"
+    ]
+    params = [ScalarQueryParameter("ts", "TIMESTAMP", snapshot_time)]
+
+    if expiration_date:
+        where.append("expiration_date = @expiry")
+        params.append(ScalarQueryParameter("expiry", "DATE", expiration_date))
+
+    sql = f"""
+    SELECT
+      strike,
+      net_gamma_exposure
+    FROM `{GEX_TABLE}`
+    WHERE {' AND '.join(where)}
+    ORDER BY strike
+    """
+
+    job_conf = QueryJobConfig(query_parameters=params)
+    return CLIENT.query(sql, job_config=job_conf).to_dataframe()
 
 
 def get_gamma_exposure_surface_data(start_date: Optional[str], end_date: Optional[str]) -> Figure:
