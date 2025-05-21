@@ -414,6 +414,10 @@ def _toggle_details(n_clicks):
 # Intraday Gamma Exposure Tab
 # --------------------------------
 def _gamma_intraday_tab():
+    # Compute default EST time string for today at 10:00:00
+    today_est = datetime.now(EAST_TZ).strftime("%Y-%m-%d")
+    default_time = f"{today_est} 10:00:00"
+
     return html.Div(
         [
             html.H3("Intraday Gamma Exposure (±5 min)"),
@@ -432,7 +436,8 @@ def _gamma_intraday_tab():
                     dcc.Input(
                         id="intraday-time-input",
                         type="text",
-                        placeholder="2025-05-06 11:30:00",
+                        value=default_time,
+                        placeholder="YYYY-MM-DD HH:MM:SS",
                         style={"width": "200px", "marginRight": "1rem"},
                     ),
                     # Refresh button
