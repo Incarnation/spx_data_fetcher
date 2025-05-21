@@ -62,7 +62,7 @@ def get_historical_expirations(limit: int = 30) -> List[str]:
     sql = f"""
     SELECT DISTINCT expiration_date
     FROM `{GEX_TABLE}`
-    WHERE expiration_date < CURRENT_DATE()
+    WHERE expiration_date <= CURRENT_DATE()
     ORDER BY expiration_date DESC
     LIMIT @limit
     """
